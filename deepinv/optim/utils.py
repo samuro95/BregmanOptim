@@ -44,7 +44,8 @@ def conjugate_gradient(A, b, max_iter=1e2, tol=1e-5):
     """
 
     def dot(s1, s2):
-        dot = (s1.conj() * s2).flatten().sum()
+        # dot = (s1.conj() * s2).flatten().sum()
+        dot = torch.sum(s1.conj() * s2, dim=(-1, -2), keepdim=True)
         return dot
 
     x = zeros_like(b)
@@ -53,16 +54,16 @@ def conjugate_gradient(A, b, max_iter=1e2, tol=1e-5):
     p = r
     rsold = dot(r, r)
 
-    for i in range(int(max_iter)):
+    for _ in range(int(max_iter)):
         Ap = A(p)
-        alpha = rsold / dot(p, Ap)
+        alpha = rsold / (dot(p, Ap) + 1e-8)
         x = x + p * alpha
-        r = r + Ap * (-alpha)
+        r = r - Ap * alpha
         rsnew = torch.real(dot(r, r))
-        # print(rsnew.sqrt())
-        if rsnew.sqrt() < tol:
+
+        if torch.all(rsnew < tol**2):
             break
-        p = r + p * (rsnew / rsold)
+        p = r + p * (rsnew / (rsold + 1e-8))
         rsold = rsnew
 
     return x
