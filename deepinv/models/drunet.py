@@ -183,7 +183,8 @@ class DRUNet(nn.Module):
             If ``sigma`` is a tensor, it must be of shape ``(batch_size,)``.
         """
         if isinstance(sigma, torch.Tensor):
-            if len(sigma.size()) > 0:
+            if sigma.ndim > 0:
+                # if x is a tensor in cuda
                 if x.get_device() > -1:
                     sigma = sigma[
                         int(x.get_device() * x.shape[0]) : int(
@@ -191,20 +192,26 @@ class DRUNet(nn.Module):
                         )
                     ]
                     noise_level_map = sigma.to(x.device).view(x.size(0), 1, 1, 1)
+
+                # if sigma is a tensor in cpu
                 else:
                     noise_level_map = sigma.view(x.size(0), 1, 1, 1).to(x.device)
+
                 noise_level_map = noise_level_map.expand(-1, 1, x.size(2), x.size(3))
+
+            # sigma is a tensor of dim 0
             else:
-                sigma = sigma.item()
-                noise_level_map = (
-                    torch.ones((x.size(0), 1, x.size(2), x.size(3)), device=x.device)
-                    * sigma
-                )
+                # sigma = sigma.item()
+                noise_level_map = torch.ones(
+                    (x.size(0), 1, x.size(2), x.size(3)), device=x.device
+                ) * sigma[None, None, None, None].to(x.device)
+        # if sigma is a float
         else:
             noise_level_map = (
                 torch.ones((x.size(0), 1, x.size(2), x.size(3)), device=x.device)
                 * sigma
             )
+
         x = torch.cat((x, noise_level_map), 1)
         if self.training or (
             x.size(2) % 8 == 0
