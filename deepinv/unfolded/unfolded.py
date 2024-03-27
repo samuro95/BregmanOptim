@@ -40,6 +40,9 @@ class BaseUnfold(BaseOptim):
                 )
         self.init_params_algo = nn.ParameterDict(self.init_params_algo)
         self.params_algo = self.init_params_algo.copy()
+        # deactivate gradient computation since they are not used in the forward
+        for param in self.init_params_algo.parameters():
+            param.requires_grad=False
         # The prior (list of instances of :class:`deepinv.optim.Prior) is converted to a `nn.ModuleList` to be trainable.
         self.prior = nn.ModuleList(self.prior)
         self.data_fidelity = nn.ModuleList(self.data_fidelity)
