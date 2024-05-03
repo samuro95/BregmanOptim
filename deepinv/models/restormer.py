@@ -87,7 +87,7 @@ class Restormer(nn.Module):
         # stores the filename of pretrained weights, used later in the code to download the pth file from the HuggingFace Hub
         weights_pth_filename = None
         # When loading pretrained weights from HuggingFace Hub, we check if our model is compatible with the weights.
-        if pretrained == "denoising":
+        if "denoising" in pretrained:
             self.is_standard_denoising_network(
                 in_channels,
                 out_channels,
@@ -104,7 +104,7 @@ class Restormer(nn.Module):
                 weights_pth_filename = "gaussian_gray_denoising_blind.pth"
             elif in_channels == 3:
                 weights_pth_filename = "gaussian_color_denoising_blind.pth"
-        elif pretrained == "denoising_real":
+        elif "denoising_real" in pretrained:
             self.is_standard_denoising_network(
                 in_channels,
                 out_channels,
@@ -121,7 +121,7 @@ class Restormer(nn.Module):
                 in_channels == 3
             ), f"Real denoising / EXPECTED in_channels == 3, INSTEAD of {in_channels}"
             weights_pth_filename = "real_denoising.pth"
-        elif pretrained == "denoising_gray":
+        elif "denoising_gray" in pretrained:
             self.is_standard_denoising_network(
                 in_channels,
                 out_channels,
@@ -138,7 +138,7 @@ class Restormer(nn.Module):
                 in_channels == 1
             ), f"Real denoising / EXPECTED in_channels == 1, INSTEAD of {in_channels}"
             weights_pth_filename = "gaussian_gray_denoising_blind.pth"
-        elif pretrained == "denoising_color":
+        elif "denoising_color" in pretrained:
             self.is_standard_denoising_network(
                 in_channels,
                 out_channels,
@@ -155,7 +155,7 @@ class Restormer(nn.Module):
                 in_channels == 3
             ), f"Color denoising / EXPECTED in_channels == 3, INSTEAD of {in_channels}"
             weights_pth_filename = "gaussian_color_denoising_blind.pth"
-        elif pretrained == "deraining":
+        elif "deraining" in pretrained:
             self.is_standard_deraining_network(
                 in_channels,
                 out_channels,
@@ -169,7 +169,7 @@ class Restormer(nn.Module):
                 dual_pixel_task,
             )
             weights_pth_filename = "deraining.pth"
-        elif pretrained == "defocus_deblurring":
+        elif "defocus_deblurring" in pretrained:
             self.is_standard_deblurring_network(
                 in_channels,
                 out_channels,
