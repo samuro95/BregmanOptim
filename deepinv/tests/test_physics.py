@@ -97,7 +97,7 @@ def find_operator(name, device):
     elif name.startswith("pansharpen"):
         img_size = (3, 30, 32)
         p = dinv.physics.Pansharpen(
-            img_size=img_size, device=device, padding=padding, filter="bilinear"
+            img_size=img_size, device=device, padding=padding, filter="bilinear",
         )
         norm = 0.4
     elif name == "aliased_pansharpen":

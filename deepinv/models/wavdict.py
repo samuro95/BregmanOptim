@@ -42,8 +42,8 @@ class WaveletDenoiser(nn.Module):
     def __init__(self, level=3, wv="db8", device="cpu", non_linearity="soft", wvdim=2):
         if isinstance(ptwt, ImportError):
             raise ImportError(
-                "pytorch_wavelets is needed to use the WaveletDenoiser class. "
-                "It should be installed with `pip install ptwt`."
+                "The PyTorch-Wavelet-Toolbox ptwt package with version at least than 0.1.7 is needed to use the WaveletDenoiser class."
+                "It should be installed with `pip install ptwt>=0.1.7`. Note that this version is not available for python versions smaller than 3.9 ."
             ) from ptwt
         super().__init__()
         self.level = level
