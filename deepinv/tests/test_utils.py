@@ -1,8 +1,15 @@
 import deepinv
 import torch
 import pytest
-
+import pkg_resources
 import matplotlib.pyplot as plt
+
+def is_version_sufficient(package_name, required_version):
+    try:
+        installed_version = pkg_resources.get_distribution(package_name).version
+        return pkg_resources.parse_version(installed_version) >= pkg_resources.parse_version(required_version)
+    except pkg_resources.DistributionNotFound:
+        return False
 
 
 @pytest.fixture

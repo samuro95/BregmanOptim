@@ -1,9 +1,8 @@
 import sys
 import pytest
 import torch
-
 import deepinv as dinv
-
+from test_utils import is_version_sufficient
 
 MODEL_LIST_1_CHANNEL = [
     "autoencoder",
@@ -26,7 +25,6 @@ MODEL_LIST = MODEL_LIST_1_CHANNEL + [
     "waveletdict_hard",
     "waveletdict_topk",
 ]
-
 
 def choose_denoiser(name, imsize):
     if name.startswith("waveletdict") or name == "waveletdenoiser":
@@ -176,16 +174,14 @@ def test_wavelet_adjoints():
 
         assert torch.allclose(e, torch.tensor([0.0], dtype=torch.float64))
 
-
+@pytest.mark.skipif(not is_version_sufficient('ptwt', '0.1.7'), 
+        reason="This test requires pytorch_wavelets version 0.1.7. It should be "
+        "installed with `pip install "
+        "git+https://github.com/fbcotter/pytorch_wavelets.git`",
+        )
 def test_wavelet_models_identity():
     # We check that variational models yield identity when regularization parameter is set to 0.
 
-    pytest.importorskip(
-        "ptwt",
-        reason="This test requires pytorch_wavelets. It should be "
-        "installed with `pip install "
-        "git+https://github.com/fbcotter/pytorch_wavelets.git`",
-    )
 
     # 1. Wavelet denoiser (single & dictionary)
     for dimension in ["2d", "3d"]:

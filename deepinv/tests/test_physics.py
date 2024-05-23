@@ -246,8 +246,8 @@ def test_operators_norm(name, device):
     :param device: (torch.device) cpu or cuda:x
     :return: asserts norm is in (.8,1.2)
     """
-    if name == "singlepixel" or name == "CS":
-        device = torch.device("cpu")
+    # if name == "singlepixel" or name == "CS":
+    #     device = torch.device("cpu")
 
     torch.manual_seed(0)
     physics, imsize, norm_ref, dtype = find_operator(name, device)
