@@ -464,7 +464,7 @@ class BaseOptim(nn.Module):
         else:
             return False
 
-    def forward(self, y, physics, x_gt=None, compute_metrics=False):
+    def forward(self, y, physics, x_gt=None, compute_metrics=False, output_iterates=False):
         r"""
         Runs the fixed-point iteration algorithm for solving :ref:`(1) <optim>`.
 
@@ -472,17 +472,23 @@ class BaseOptim(nn.Module):
         :param deepinv.physics physics: physics of the problem for the acquisition of ``y``.
         :param torch.Tensor x_gt: (optional) ground truth image, for plotting the PSNR across optim iterations.
         :param bool compute_metrics: whether to compute the metrics or not. Default: ``False``.
+        :param bool output_iterates: whether to output all the iterates of the algorithm or not. Default: ``False``.
         :return: If ``compute_metrics`` is ``False``,  returns (torch.Tensor) the output of the algorithm.
                 Else, returns (torch.Tensor, dict) the output of the algorithm and the metrics.
         """
-        X, metrics = self.fixed_point(
-            y, physics, x_gt=x_gt, compute_metrics=compute_metrics
+        X, metrics, iterates = self.fixed_point(
+            y, physics, x_gt=x_gt, compute_metrics=compute_metrics, output_iterates=output_iterates
         )
         x = self.get_output(X)
-        if compute_metrics:
-            return x, metrics
-        else:
+        if not metrics and not iterates:
             return x
+        else:
+            out = (x,)
+            if compute_metrics:
+                out += (metrics,)
+            if output_iterates:
+                out += (iterates,)
+            return out
 
 
 def create_iterator(iteration, prior=None, F_fn=None, g_first=False):

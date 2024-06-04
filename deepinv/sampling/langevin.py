@@ -105,6 +105,8 @@ class MonteCarlo(nn.Module):
         :param torch.Tensor y: Measurements
         :param deepinv.physics.Physics physics: Forward operator associated with the measurements
         :param float seed: Random seed for generating the Monte Carlo samples
+        :param torch.Tensor x_init: Initial guess for the reconstruction
+        :param bool output_chain: If True, will return the thinned Monte Carlo samples (after burn-in iterations).
         :return: (tuple of torch.tensor) containing the posterior mean and variance.
         """
         with torch.no_grad():
@@ -142,7 +144,6 @@ class MonteCarlo(nn.Module):
                         mean_prev = statistics.mean().clone()
                         var_prev = statistics.var().clone()
                     statistics.update(self.g_function(x))
-
                     if self.save_chain:
                         self.chain.append(x.clone())
 

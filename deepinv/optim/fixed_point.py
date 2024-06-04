@@ -195,7 +195,7 @@ class FixedPoint(nn.Module):
         est[0] = x
         return {"est": est, "cost": F}
 
-    def forward(self, *args, compute_metrics=False, x_gt=None, **kwargs):
+    def forward(self, *args, compute_metrics=False, x_gt=None, compute_iterates=False, **kwargs):
         r"""
         Loops over the fixed-point iterator as (1) and returns the fixed point.
 
@@ -209,6 +209,7 @@ class FixedPoint(nn.Module):
 
         :param bool compute_metrics: if ``True``, the metrics are computed along the iterations. Default: ``False``.
         :param torch.Tensor x_gt: ground truth solution. Default: ``None``.
+        :param bool compute_iterates: if ``True``, output all the iterates. Default: ``False``.
         :param args: optional arguments for the iterator. Commonly (y,physics) where ``y`` (torch.Tensor y) is the measurement and
                     ``physics`` (deepinv.physics) is the physics model.
         :param kwargs: optional keyword arguments for the iterator.
@@ -226,6 +227,7 @@ class FixedPoint(nn.Module):
             if self.init_metrics_fn and compute_metrics
             else None
         )
+        iterates = [X['est'][0]] if compute_iterates else None
         if self.anderson_acceleration:
             x_hist, T_hist, H, q = self.init_anderson_acceleration(X)
         it = 0
@@ -253,6 +255,8 @@ class FixedPoint(nn.Module):
                     cur_params,
                     *args,
                 )
+            if compute_iterates:
+                iterates.append(X['est'][0])
             check_iteration = (
                 self.check_iteration_fn(X_prev, X) if self.check_iteration_fn else True
             )
@@ -272,4 +276,4 @@ class FixedPoint(nn.Module):
                 it += 1
             else:
                 X = X_prev
-        return X, metrics
+        return X, metrics, iterates
