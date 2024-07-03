@@ -1,4 +1,5 @@
 from .drunet import DRUNet
+from .drunet_multi_conditional import DRUNetConditional
 from .scunet import SCUNet
 from .ae import AutoEncoder
 from .unet import UNet
