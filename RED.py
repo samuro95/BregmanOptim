@@ -124,10 +124,9 @@ class ExplicitRED(dinv.optim.Prior):
         :param torch.tensor x: Variable :math:`x` at which the prior is computed.
         :return: (torch.tensor) prior :math:`g(x)`.
         """
-        return torch.sum((x - self.denoiser(x,sigma_denoiser))*x, dim=(1, 2, 3))
+        return 0.5*torch.sum((x - self.denoiser(x,sigma_denoiser))*x, dim=(1, 2, 3))
 
 
-# Specify the Denoising prior
 prior_1 = RED(
     denoiser=dinv.models.DRUNet(pretrained='download', train=False, device=device)
 )
@@ -137,11 +136,11 @@ prior_2 = ExplicitRED(
 )
 
 # prior_1 = RED(
-#     denoiser=dinv.models.DRUNetConditional(pretrained='../rhomonotone/ckpts/state_dict_ckp_210.pth.tar', train=False, device=device)
+#     denoiser=dinv.models.DRUNetConditional(pretrained='../rhomonotone/ckpts/state_dict_ckp_240.pth.tar', train=False, device=device)
 # )
 
 # prior_2 = ExplicitRED(
-#     denoiser=dinv.models.DRUNetConditional(pretrained='../rhomonotone/ckpts/state_dict_ckp_210.pth.tar', train=False, device=device)
+#     denoiser=dinv.models.DRUNetConditional(pretrained='../rhomonotone/ckpts/state_dict_ckp_240.pth.tar', train=False, device=device)
 # )
 
 
@@ -155,33 +154,37 @@ dataloader = DataLoader(
 
 # params_algo['stepsize'] = 1.
 
-# n_iter = 100
-# x = next(iter(dataloader))[0].to(device)
-# y = p(x)
-# x1 = x2 = y
-# x1_list = []
-# x2_list = []
-# for i in range(n_iter):
-#     x1 = x1 - params_algo["stepsize"] * params_algo["lambda"] * prior_1.grad(x1, params_algo["g_param"])
-#     x1 = data_fidelity.prox(x1, y, p, gamma = params_algo["stepsize"])
-#     x2 = x2 - params_algo["stepsize"] * params_algo["lambda"] * prior_2.grad(x2, params_algo["g_param"])
-#     x2 = data_fidelity.prox(x2, y, p, gamma = params_algo["stepsize"])
-#     # out_1 = x1 - params_algo["stepsize"] * params_algo["lambda"] * prior_1.grad(x1, params_algo["g_param"])
-#     # out_2 = x2 - params_algo["stepsize"] * params_algo["lambda"] * prior_2.grad(x2, params_algo["g_param"])
-#     x1_list.append(x1.detach().cpu())
-#     x2_list.append(x2.detach().cpu())
-# diff_list = [torch.norm(x1 - x2) for x1, x2 in zip(x1_list, x2_list)]
-# x1_conv = [torch.norm(x1_list[i+1] - x1_list[i]) for i in range(len(x1_list)-1)]
-# x2_conv = [torch.norm(x2_list[i+1] - x2_list[i]) for i in range(len(x2_list)-1)]
-# import matplotlib.pyplot as plt
-# plt.figure(0)
-# plt.plot(diff_list)
-# plt.figure(1)
-# plt.semilogy(x1_conv, label = 'RED')
-# plt.semilogy(x2_conv, label = 'symmetric RED')
-# plt.legend()
-# plt.show()
+n_iter = 300
+x = next(iter(dataloader))[0].to(device)
+y = p(x)
+x1 = x2 = y
+x1_list = []
+x2_list = []
+for i in range(n_iter):
+    x1 = x1 - params_algo["stepsize"] * params_algo["lambda"] * prior_1.grad(x1, params_algo["g_param"])
+    x1 = data_fidelity.prox(x1, y, p, gamma = params_algo["stepsize"])
+    x2 = x2 - params_algo["stepsize"] * params_algo["lambda"] * prior_2.grad(x2, params_algo["g_param"])
+    x2 = data_fidelity.prox(x2, y, p, gamma = params_algo["stepsize"])
+    # out_1 = x1 - params_algo["stepsize"] * params_algo["lambda"] * prior_1.grad(x1, params_algo["g_param"])
+    # out_2 = x2 - params_algo["stepsize"] * params_algo["lambda"] * prior_2.grad(x2, params_algo["g_param"])
+    x1_list.append(x1.detach().cpu())
+    x2_list.append(x2.detach().cpu())
+    x1_end = x1
+    x2_end = x2
+diff_list = [torch.norm(x1 - x2) for x1, x2 in zip(x1_list, x2_list)]
+x1_conv = [torch.norm(x1_list[i+1] - x1_list[i]) for i in range(len(x1_list)-1)]
+x2_conv = [torch.norm(x2_list[i+1] - x2_list[i]) for i in range(len(x2_list)-1)]
+import matplotlib.pyplot as plt
+plt.figure(0)
+plt.plot(diff_list)
+plt.figure(1)
+plt.semilogy(x1_conv, label = 'RED')
+plt.semilogy(x2_conv, label = 'symmetric RED')
+plt.legend()
 
+dinv.utils.plot([x1_end, x2_end])
+
+plt.show()
 
 # # instantiate the algorithm class to solve the IP problem.
 # model_1 = optim_builder(
@@ -311,62 +314,62 @@ class GSPnP(RED):
 # )
 
 
-print(params_algo['g_param'])
-params_algo['stepsize'] = 1.
-params_algo['g_param'] = 0.05
+# print(params_algo['g_param'])
+# params_algo['stepsize'] = 1
+# params_algo['g_param'] = 0.05
 
-def Jvp(y, x, u):
-    w = torch.ones_like(y, requires_grad=True)
-    return torch.autograd.grad(torch.autograd.grad(y, x, w, create_graph=True), w, u, create_graph=True)[0]
+# def Jvp(y, x, u):
+#     w = torch.ones_like(y, requires_grad=True)
+#     return torch.autograd.grad(torch.autograd.grad(y, x, w, create_graph=True), w, u, create_graph=True)[0]
 
-def vJp(y, x, u):
-    return torch.autograd.grad(y, x, u, retain_graph=True, create_graph=True)[0]   
+# def vJp(y, x, u):
+#     return torch.autograd.grad(y, x, u, retain_graph=True, create_graph=True)[0]   
 
-with torch.no_grad():
-    n_images_max = 1
-    max_iter = 10000
-    for k in range(n_images_max):
-        print('Image', k)
-        y = next(iter(dataloader))[0].to(device)
-        x = y
-        norm_tab = []
-        T_tab = []
-        iter_tab = []
-        J_norm = []
-        for i in range(max_iter):
-            x_old = x
-            grad = params_algo["lambda"]*prior_1.grad(x_old, params_algo["g_param"])
-            grad.detach()
-            x_old.detach()
-            T_tab.append(grad)
-            iter_tab.append(x_old)
-            x = x_old - params_algo["stepsize"] * grad
-            x = torch.clip(x, 0, 1)
-            norm = torch.norm(x - x_old).item()
-            norm_tab.append(norm)
-            if norm < thres_conv:
-                print('Image', k, 'converged at iteration', i)
-                break
-            # f = lambda z : prior_1.denoiser(z, params_algo["g_param"])
-            # jvp = torch.autograd.functional.jvp(f, x, v = x)[1]
-            # vjp = torch.autograd.functional.vjp(f, x, v = x)[1]
-            # J_norm.append(torch.norm(jvp-vjp))
-        T = prior_1.grad(x, params_algo["g_param"])
-        MVI_tab = [(torch.sum((T_tab[i] - T)*(iter_tab[i] - x)) / torch.norm(T_tab[i] - T)**2).item() for i in range(len(T_tab))]
-        mono_tab = [(torch.sum((T_tab[i] - T)*(iter_tab[i] - x)) / torch.norm(iter_tab[i] - x)**2).item() for i in range(len(T_tab))]
-        Lip_tab = [norm_tab[i+1] / norm_tab[i] for i in range(len(norm_tab)-1)]
-        # move_tab = [(torch.norm(T_tab[i] - T) / torch.norm(iter_tab[i] - x)).item() for i in range(len(T_tab))]
-        # print('Image', k, 'min', min(MVI_tab))
-        plt.figure(0)
-        plt.plot(MVI_tab)
-        plt.figure(1)
-        plt.plot(mono_tab)
-        plt.figure(3)
-        plt.semilogy(norm_tab)
-        plt.figure(4)
-        plt.plot(Lip_tab)
-        dinv.utils.plot([x])
-    plt.show()
+# with torch.no_grad():
+#     n_images_max = 1
+#     max_iter = 10000
+#     for k in range(n_images_max):
+#         print('Image', k)
+#         y = next(iter(dataloader))[0].to(device)
+#         x = y
+#         norm_tab = []
+#         T_tab = []
+#         iter_tab = []
+#         J_norm = []
+#         for i in range(max_iter):
+#             x_old = x
+#             grad = params_algo["lambda"]*prior_1.grad(x_old, params_algo["g_param"])
+#             grad.detach()
+#             x_old.detach()
+#             T_tab.append(grad)
+#             iter_tab.append(x_old)
+#             x = x_old - params_algo["stepsize"] * grad
+#             x = torch.clip(x, 0, 1)
+#             norm = torch.norm(x - x_old).item()
+#             norm_tab.append(norm)
+#             if norm < thres_conv:
+#                 print('Image', k, 'converged at iteration', i)
+#                 break
+#             # f = lambda z : prior_1.denoiser(z, params_algo["g_param"])
+#             # jvp = torch.autograd.functional.jvp(f, x, v = x)[1]
+#             # vjp = torch.autograd.functional.vjp(f, x, v = x)[1]
+#             # J_norm.append(torch.norm(jvp-vjp))
+#         T = prior_1.grad(x, params_algo["g_param"])
+#         MVI_tab = [(torch.sum((T_tab[i] - T)*(iter_tab[i] - x)) / torch.norm(T_tab[i] - T)**2).item() for i in range(len(T_tab))]
+#         mono_tab = [(torch.sum((T_tab[i] - T)*(iter_tab[i] - x)) / torch.norm(iter_tab[i] - x)**2).item() for i in range(len(T_tab))]
+#         Lip_tab = [norm_tab[i+1] / norm_tab[i] for i in range(len(norm_tab)-1)]
+#         # move_tab = [(torch.norm(T_tab[i] - T) / torch.norm(iter_tab[i] - x)).item() for i in range(len(T_tab))]
+#         # print('Image', k, 'min', min(MVI_tab))
+#         plt.figure(0)
+#         plt.plot(MVI_tab)
+#         plt.figure(1)
+#         plt.plot(mono_tab)
+#         plt.figure(3)
+#         plt.semilogy(norm_tab)
+#         plt.figure(4)
+#         plt.plot(Lip_tab)
+#         dinv.utils.plot([x])
+#     plt.show()
 
 
 
