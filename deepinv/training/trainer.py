@@ -158,6 +158,18 @@ class Trainer:
     verbose_individual_losses: bool = True
     display_losses_eval: bool = False
 
+    def load_model(self):
+        if self.ckpt_pretrained is not None:
+            checkpoint = torch.load(self.ckpt_pretrained)
+            self.model.load_state_dict(checkpoint["state_dict"])
+            if "optimizer" in checkpoint:
+                self.optimizer.load_state_dict(checkpoint["optimizer"])
+            if "wandb_id" in checkpoint:
+                self.wandb_setup["id"] = checkpoint["wandb_id"]
+                self.wandb_setup["resume"] = "allow"
+            if "epoch" in checkpoint:
+                self.epoch_start = checkpoint["epoch"]
+
     def setup_train(self):
         r"""
         Set up the training process.
@@ -191,17 +203,8 @@ class Trainer:
                 "Physics generator is provided but online_measurements is False. Physics generator will not be used."
             )
 
+        self.load_model()
         self.epoch_start = 0
-        if self.ckpt_pretrained is not None:
-            checkpoint = torch.load(self.ckpt_pretrained)
-            self.model.load_state_dict(checkpoint["state_dict"])
-            if "optimizer" in checkpoint:
-                self.optimizer.load_state_dict(checkpoint["optimizer"])
-            if "wandb_id" in checkpoint:
-                self.wandb_setup["id"] = checkpoint["wandb_id"]
-                self.wandb_setup["resume"] = "allow"
-            if "epoch" in checkpoint:
-                self.epoch_start = checkpoint["epoch"]
 
         # wandb initialization
         if self.wandb_vis:
@@ -741,6 +744,7 @@ class Trainer:
 
         if self.wandb_vis:
             wandb.save("model.h5")
+            wandb.finish()
 
         return self.model
 
@@ -753,7 +757,7 @@ class Trainer:
 
         :param torch.utils.data.DataLoader test_dataloader: Test data loader, which should provide a tuple of (x, y) pairs.
         """
-
+        self.load_model()
         return test(
             self.model,
             physics=self.physics,
