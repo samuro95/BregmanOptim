@@ -18,8 +18,11 @@ results/
 *.pth
 *.ckpt
 *.tar.gz
+*.gz
+*-ubyte
 *tmp
 *.tar
+*.ipynb
 
 # Folders
 /docs/build/
