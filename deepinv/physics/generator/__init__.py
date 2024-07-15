@@ -15,7 +15,6 @@ from .mri import (
     RandomMaskGenerator,
     EquispacedMaskGenerator,
 )
-from .noise import SigmaGenerator
 from .inpainting import (
     BernoulliSplittingMaskGenerator,
     GaussianSplittingMaskGenerator,
