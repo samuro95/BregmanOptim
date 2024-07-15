@@ -33,6 +33,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
+py-modules = ["deepinv"]
 platforms = ["any"]
 
 [project.readme]

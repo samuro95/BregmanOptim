@@ -19,11 +19,13 @@ from deepinv.physics.generator import ProductConvolutionPatchBlurGenerator
 from deepinv.physics.generator import (
     DiffractionBlurGenerator,
     ProductConvolutionBlurGenerator,
+    ProductConvolutionPatchBlurGenerator,
 )
 from deepinv.physics.blur import SpaceVaryingBlur
 
 
-# %% Load test images
+# %%
+# Load test images
 # ----------------
 #
 # First, let's load some test images.
