@@ -312,7 +312,7 @@ i = torch.randint(0, img_size[0], (dirac_comb.size(0), num_patches, ))
 j = torch.randint(0, img_size[1], (dirac_comb.size(0), num_patches, ))
 centers = torch.stack((i, j), dim=-1)
 psf = physics.get_psf(centers=centers)
-plot(psf.flatten(0, 1))
+plot(psf.flatten(0,1))
 
 # %%
 patch_size = 64
@@ -346,4 +346,5 @@ j = torch.randint(
     patch_size, img_size[1] - patch_size, (dirac_comb.size(0), num_patches, ))
 centers = torch.stack((i, j), dim=-1)
 psf = patch_physics.get_psf(centers=centers)
-plot(psf.flatten(0, 1))
+plot(psf.flatten(0,1))
+# %%
