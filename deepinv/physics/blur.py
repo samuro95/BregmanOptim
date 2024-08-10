@@ -528,9 +528,9 @@ class SpaceVaryingBlur(LinearPhysics):
 
     def get_psf(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
         r"""
-        :param torch.Tensor centers: (B, num_patches, 2)
+        :param torch.Tensor centers: (B, num_center_per_batch, 2)
 
-        :return: (num_patches, B, C, psf_size, psf_size)
+        :return: (num_patch_psf, B, C, psf_size, psf_size)
         """
         self.update_parameters(**kwargs)
         h = self.filters
@@ -547,44 +547,75 @@ class SpaceVaryingBlur(LinearPhysics):
             self.check_patch_info()
 
         # Method 1: Simple nested loops
-        # psf = []
-        # for b in range(centers.size(0)):
-        #     for k in range(centers.size(1)):
-        #         position = centers[b, k, :]
-        #         if self.method == 'product_convolution2d':
-        #             psf.append(get_psf_product_convolution2d(
-        #                 h[:, b:b+1, ...], w[:, b:b+1, ...], position))
-        #         elif self.method == 'product_convolution2d_patch':
-        #             psf.append(get_psf_product_convolution2d_patches(
-        #                 h[:, b:b+1, ...], w, position, overlap=self.overlap, num_patches=self.num_patches))
-        # return torch.stack(psf, dim=0)
-        # Method 2: New function
         psf = []
-        for k in range(centers.size(1)):
-            position = centers[:, k, :]
-            if self.method == 'product_convolution2d':
-                psf.append(get_psf_product_convolution2d(
-                    h, w, position))
-            elif self.method == 'product_convolution2d_patch':
+        for b in range(centers.size(0)):
+            for k in range(centers.size(1)):
+                position = centers[b, k, :]
+                if self.method == 'product_convolution2d':
+                    psf.append(get_psf_product_convolution2d(
+                        h[:, b:b+1, ...], w[:, b:b+1, ...], position))
+                elif self.method == 'product_convolution2d_patch':
+                    psf.append(get_psf_product_convolution2d_patches(
+                        h[:, b:b+1, ...], w, position, overlap=self.overlap, num_patches=self.num_patches))
+        return torch.stack(psf, dim=0)
+
+    def get_psf_2(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
+        r"""
+        :param torch.Tensor centers: (B, num_center_per_batch, 2)
+
+        :return: (B, num_center_per_batch, C, psf_size, psf_size)
+        """
+        self.update_parameters(**kwargs)
+        h = self.filters
+        w = self.multipliers
+
+        if self.method == "product_convolution2d_patch":
+            if patch_size is not None:
+                self.patch_size = patch_size
+            if overlap is not None:
+                self.overlap = overlap
+
+            self.update_patch_info(
+                self.image_size, self.patch_size, self.overlap)
+            self.check_patch_info()
+
+        psf = []
+        if self.method == 'product_convolution2d_patch':
+            for k in range(centers.size(1)):
+                position = centers[:, k, :]
                 psf.append(get_psf_product_convolution2d_patches_v2(
                     h, w, position, overlap=self.overlap, num_patches=self.num_patches))
+        else:
+            raise ValueError(f'Unsupported method {self.method}')
         return torch.stack(psf, dim=1)
 
-        # Method 3: vmap - automatic vectorization
-        # if self.method == 'product_convolution2d':
-        #     func = get_psf_product_convolution2d
-        #     func_vmap_over_b = torch.vmap(func, in_dims=(1, 1, 1))
-        #     func_vmap_full = torch.vmap(
-        #         func_vmap_over_b, in_dims=(None, None, 1))
-        # elif self.method == 'product_convolution2d_patch':
-        #     func = partial(get_psf_product_convolution2d_patches,
-        #                    overlap=self.overlap, num_patches=self.num_patches)
-        #     func_vmap_over_b = torch.vmap(func, in_dims=(1, None, 0))
-        #     func_vmap_full = torch.vmap(
-        #         func_vmap_over_b, in_dims=(None, None, 1))
+    def get_psf_3(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
+        r"""
+        :param torch.Tensor centers: (B, num_center_per_batch, 2)
 
-        # psf = func_vmap_full(h, w, centers)
-        # return psf
+        :return: (B, num_center_per_batch, C, psf_size, psf_size)
+        """
+        self.update_parameters(**kwargs)
+        h = self.filters
+        w = self.multipliers
+
+        if self.method == "product_convolution2d_patch":
+            if patch_size is not None:
+                self.patch_size = patch_size
+            if overlap is not None:
+                self.overlap = overlap
+
+            self.update_patch_info(
+                self.image_size, self.patch_size, self.overlap)
+            self.check_patch_info()
+
+        psf = []
+        if self.method == 'product_convolution2d_patch':
+            psf = get_psf_product_convolution2d_patches_v3(
+                h, w, centers, overlap=self.overlap, num_patches=self.num_patches)
+        else:
+            raise ValueError(f'Unsupported method {self.method}')
+        return psf
 
     def update_parameters(self, filters=None, multipliers=None, padding=None, **kwargs):
         r"""

@@ -399,6 +399,85 @@ def get_psf_product_convolution2d_patches_v2(h: Tensor, w: Tensor, position: Tup
 
     return psf.flip((-1, -2)) if isinstance(psf, torch.Tensor) else psf
 
+
+def get_psf_product_convolution2d_patches_v3(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
+    r"""
+    Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d_patches` function.
+
+    :param torch.Tensor w: Tensor of size (K, b, C, H, W). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (K, B, C, h, w). h<=H and w<=W
+
+    :param Tuple[int] position: Position of the PSF patch (B, N, 2)
+    :param Tuple[int] overlap: Overlap between PSF patches
+    :param Tuple[int] num_patches: Number of PSF patches
+
+
+    :return: PSF at the given position (B, N, C, psf_size, psf_size)
+    """
+    patch_size = w.shape[-2:]
+    index_h = []
+    index_w = []
+    patch_position_h = []
+    patch_position_w = []
+
+    # Possible to use torch.vmap to parallelize these loops
+    for b in range(position.size(0)):
+        for n in range(position.size(1)):
+            ih, iw, ph, pw = get_index_and_position(
+                position[b, n].tolist(), patch_size, overlap, num_patches)
+
+            index_h.append(ih)
+            index_w.append(iw)
+            patch_position_h.append(ph)
+            patch_position_w.append(pw)
+
+    # from functools import partial
+    # func = partial(
+    #     get_index_and_position, patch_size=patch_size, overlap=overlap, num_patches=num_patches)
+    # func_vmap = torch.vmap(
+    #     torch.vmap(func, in_dims=(0)), in_dims=0)
+    # print(func_vmap(position))
+    # (B, N, x)
+    index_h = torch.tensor(index_h, device=h.device, dtype=torch.long).view(
+        position.size(0), position.size(1), -1)
+    index_w = torch.tensor(index_w, device=h.device, dtype=torch.long).view(
+        position.size(0), position.size(1), -1)
+    patch_position_h = torch.tensor(
+        patch_position_h, device=h.device, dtype=torch.long).view(position.size(0), position.size(1), -1)
+    patch_position_w = torch.tensor(
+        patch_position_w, device=h.device, dtype=torch.long).view(position.size(0), position.size(1), -1)
+
+    # Reshape the PSF and the multipliers
+    h = h.view(num_patches[0], num_patches[1], h.size(
+        1), h.size(2), h.size(3), h.size(4))
+
+    w = w.view(num_patches[0], num_patches[1], w.size(
+        1), w.size(2), w.size(3), w.size(4))
+
+    batch_index = torch.arange(h.size(2), device=h.device, dtype=torch.long)
+    # print('h', h.shape)
+    # print('w', w.shape)
+    # print('index_h', index_h.shape)
+    # print('index_w', index_w.shape)
+    # print('patch_position_h', patch_position_h.shape)
+    # print('patch_position_w', patch_position_w.shape)
+
+    h_selected = h[index_h[..., None, :],
+                   index_w[..., :, None],
+                   batch_index[:, None, None, None],
+                   ...]
+    w_selected = w[index_h[..., None, :],
+                   index_w[..., :, None],
+                   torch.arange(w.size(2), device=w.device,
+                                dtype=torch.long)[:, None, None, None],
+                   ...,
+                   patch_position_h[..., None, :],
+                   patch_position_w[..., :, None]]
+
+    # print(h_selected.shape, w_selected.shape)
+    psf = torch.sum(h_selected * w_selected[..., None, None], dim=(2, 3))
+
+    return psf.flip((-1, -2))
 # UTILITY FUNCTIONS
 
 
@@ -416,6 +495,8 @@ def get_index_and_position(position: Tuple[int],  patch_size: Tuple[int], overla
     overlap = as_pair(overlap)
     patch_size = as_pair(patch_size)
 
+    if isinstance(position, torch.Tensor):
+        position = position.tolist()
     p = patch_size
     o = overlap
     n = (math.floor(position[0] / (p[0] - o[0])),
@@ -462,6 +543,10 @@ def get_index_and_position(position: Tuple[int],  patch_size: Tuple[int], overla
             index_w.append(n[1])
             patch_position_w.append(
                 position[1] - n[1] * (p[1] - o[1]))
+
+    if len(index_h) == 0 or len(index_w) == 0:
+        raise ValueError(
+            f'The position center {position} is not valid.')
     return index_h, index_w, patch_position_h, patch_position_w
 
 
