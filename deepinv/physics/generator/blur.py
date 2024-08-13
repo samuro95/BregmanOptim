@@ -6,7 +6,7 @@ from math import ceil, floor
 from deepinv.physics.generator import PhysicsGenerator
 from deepinv.physics.functional import histogramdd, conv2d
 from deepinv.physics.functional.interp import ThinPlateSpline
-from deepinv.physics.functional.product_convolution import unity_partition_function_2d, compute_patch_info, crop_unity_partition_2d
+from deepinv.physics.functional.product_convolution import unity_partition_function_2d, compute_patch_info, crop_unity_partition_2d, as_pair
 
 
 class PSFGenerator(PhysicsGenerator):
@@ -684,12 +684,9 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        if isinstance(patch_size, int):
-            patch_size = (patch_size, patch_size)
-        if isinstance(overlap, int):
-            overlap = (overlap, overlap)
-        if isinstance(image_size, int):
-            image_size = (image_size, image_size)
+        patch_size = as_pair(patch_size)
+        overlap = as_pair(overlap)
+        image_size = as_pair(image_size)
 
         self.psf_generator = psf_generator
         self.psf_size = psf_generator.psf_size
@@ -699,13 +696,10 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
         self.image_size = image_size
         w = unity_partition_function_2d(
             image_size, patch_size, overlap, mode='bump')
+        w, _ = crop_unity_partition_2d(w, patch_size, overlap, self.psf_size)
 
-        w, _ = crop_unity_partition_2d(
-            w, patch_size, overlap, self.psf_size)
-
-        self.w = w.flatten(0, 1).unsqueeze(1).unsqueeze(
-            2).to(**self.factory_kwargs)
-
+        self.w = w.flatten(0, 1).unsqueeze(
+            0).unsqueeze(0).to(**self.factory_kwargs)
         self.patch_info = compute_patch_info(image_size, patch_size, overlap)
         self.num_patches = np.prod(self.patch_info['num_patches'])
 
@@ -722,17 +716,12 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
             - multipliers torch.Tensor: (K, B, C, patch_size, patch_size)
         """
         if patch_size is not None:
-            if isinstance(patch_size, int):
-                patch_size = (patch_size, patch_size)
-            self.patch_size = patch_size
-            self.num_patches = np.prod(compute_patch_info(
-                self.image_size, self.patch_size, self.overlap)['num_patches'])
+            self.patch_size = as_pair(patch_size)
         if overlap is not None:
-            if isinstance(overlap, int):
-                overlap = (overlap, overlap)
-            self.overlap = overlap
-            self.num_patches = np.prod(compute_patch_info(
-                self.image_size, self.patch_size, self.overlap)['num_patches'])
+            self.overlap = as_pair(overlap)
+
+        self.num_patches = np.prod(compute_patch_info(
+            self.image_size, self.patch_size, self.overlap)['num_patches'])
 
         params = self.psf_generator.step(
             batch_size * self.num_patches, **kwargs)
@@ -741,8 +730,8 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
         new_params = dict(params)
         del new_params["filter"]
 
-        filters = filters.view(self.num_patches, batch_size, filters.size(
-            1), filters.size(2), filters.size(3))
+        filters = filters.view(batch_size, self.num_patches, filters.size(
+            1), filters.size(2), filters.size(3)).transpose(1, 2)
         # Ending
         params_blur = dict({"filters": filters,
                             "multipliers": self.w,

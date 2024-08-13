@@ -1,7 +1,7 @@
 import math
 import torch.nn.functional as F
 import torch
-from typing import Tuple, Union
+from typing import Tuple, Union, List
 from torch import Tensor
 from deepinv.physics.functional.multiplier import (
     multiplier,
@@ -9,7 +9,8 @@ from deepinv.physics.functional.multiplier import (
 )
 from deepinv.physics.functional.convolution import conv2d, conv_transpose2d
 import numpy as np
-# PRODUCT CONVOLUTION ON THE WHOLE IMAGE, USING EIGEN-PSF
+
+# METHOD 1: PRODUCT CONVOLUTION ON THE WHOLE IMAGE, USING EIGEN-PSF
 
 
 def product_convolution2d(
@@ -79,7 +80,7 @@ def product_convolution2d_adjoint(
     return result
 
 
-def get_psf_product_convolution2d(h, w, position: Tuple[int]):
+def get_psf_pconv2d_eigen(h, w, position: Tuple[int]):
     r"""
     Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d` function.
     :param torch.Tensor w: Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
@@ -88,7 +89,7 @@ def get_psf_product_convolution2d(h, w, position: Tuple[int]):
     """
     return torch.sum(h * w[..., position[0]:position[0]+1, position[1]:position[1] + 1], dim=0).flip((-1, -2))
 
-# PRODUCT CONVOLUTION USING PATCHES
+# METHOD 2: PRODUCT CONVOLUTION USING PATCHES
 
 
 def product_convolution2d_patches(
@@ -116,18 +117,16 @@ def product_convolution2d_patches(
     where :math:`\star` is a convolution, :math:`\odot` is a Hadamard product, :math:`w_k` are multipliers :math:`h_k` are filters.
 
     :param torch.Tensor x: Tensor of size (B, C, H, W)
-    :param torch.Tensor w: Tensor of size (K, b, c, patch_size + psf_size, patch_size + psf_size). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, psf_size, psf_size). b in {1, B} and c in {1, C}, h<=H and w<=W
+    :param torch.Tensor w: Tensor of size (b, c, K, patch_size, patch_size). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (b, c, K, psf_size, psf_size). b in {1, B} and c in {1, C}, h<=H and w<=W
+        where `K` is the number of patches. 
 
-    :return: torch.Tensor y
-    :rtype: tuple
+    :return: torch.Tensor the blurry image. 
     """
-    if isinstance(patch_size, int):
-        patch_size = (patch_size, patch_size)
-    if isinstance(overlap, int):
-        overlap = (overlap, overlap)
-
+    patch_size = as_pair(patch_size)
+    overlap = as_pair(overlap)
     psf_size = h.shape[-2:]
+
     patches = image_to_patches(
         x,
         patch_size=patch_size,
@@ -136,21 +135,21 @@ def product_convolution2d_patches(
     n_rows, n_cols = patches.size(2), patches.size(3)
     assert n_rows * \
         n_cols == h.size(
-            0), 'The number of patches must be equal to the number of PSFs'
+            2), 'The number of patches must be equal to the number of PSFs'
 
+    # Flatten K1 and K2 to: (B, C, K, P1, P2)
     patches = patches.flatten(2, 3)
-    patches = patches * w.permute(1, 2, 0, 3, 4)
+    patches = patches * w
 
     patches = F.pad(patches, pad=(
         psf_size[1] - 1, psf_size[1] - 1, psf_size[0] - 1, psf_size[0] - 1), value=0, mode='constant')
 
     result = []
-    for k in range(h.size(0)):
+    for k in range(h.size(2)):
         result.append(conv2d(
-            patches[:, :, k, ...], h[k, ...], padding='valid',
+            patches[:, :, k, ...], h[:, :, k, ...], padding='valid',
         ))
     # (B, C, K, H', W')
-
     result = torch.stack(result, dim=2)
     margin = (psf_size[0] - 1, psf_size[1] - 1)
     B, C, K, H, W = result.size()
@@ -183,18 +182,14 @@ def product_convolution2d_adjoint_patches(
 
     where :math:`\star` is a convolution, :math:`\odot` is a Hadamard product, :math:`w_k` are multipliers :math:`h_k` are filters.
 
-    :param torch.Tensor x: Tensor of size (B, C, H, W)
-    :param torch.Tensor w: Tensor of size (K, b, c, patch_size + psf_size, patch_size + psf_size). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, psf_size, psf_size). b in {1, B} and c in {1, C}, h<=H and w<=W
+    :param torch.Tensor y: Tensor of size (B, C, H, W)
+    :param torch.Tensor w: Tensor of size (b, c, K, patch_size, patch_size). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (b, c, K, psf_size, psf_size). b in {1, B} and c in {1, C}, h<=H and w<=W
 
-    :return: torch.Tensor y
-    :rtype: tuple
+    :return: torch.Tensor x
     """
-    if isinstance(patch_size, int):
-        patch_size = (patch_size, patch_size)
-    if isinstance(overlap, int):
-        overlap = (overlap, overlap)
-
+    patch_size = as_pair(patch_size)
+    overlap = as_pair(overlap)
     psf_size = h.shape[-2:]
     y = F.pad(y, pad=(
         psf_size[1] - 1, psf_size[1] - 1, psf_size[0] - 1, psf_size[0] - 1), value=0, mode='constant')
@@ -210,31 +205,29 @@ def product_convolution2d_adjoint_patches(
     n_rows, n_cols = patches.size(2), patches.size(3)
     assert n_rows * \
         n_cols == h.size(
-            0), 'The number of patches must be equal to the number of PSFs'
+            2), 'The number of patches must be equal to the number of PSFs'
 
     patches = patches.flatten(2, 3)
     result = []
-    for k in range(h.size(0)):
+    for k in range(h.size(2)):
         result.append(conv_transpose2d(
-            patches[:, :, k, ...], h[k, ...], padding='valid'),
+            patches[:, :, k, ...], h[:, :, k, ...], padding='valid'),
         )
     # (B, C, K, H', W')
     result = torch.stack(result, dim=2)
     margin = (psf_size[0] - 1, psf_size[1] - 1)
     result = result[..., margin[0]: - margin[0], margin[1]: - margin[1]]
-    result = result * w.permute(1, 2, 0, 3, 4)
-    B, C, K, H, W = result.size()
-    result = patches_to_image(result.view(
-        B, C, n_rows, n_cols, H, W), overlap)
-    return result
+    result = result * w
+    B, C, _, H, W = result.size()
+    return patches_to_image(result.view(B, C, n_rows, n_cols, H, W), overlap)
 
 
-def get_psf_product_convolution2d_patches(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
+def get_psf_pconv2d_patch(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
     r"""
     Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d_patches` function.
 
-    :param torch.Tensor w: Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
+    :param torch.Tensor w: Tensor of size (b, c, K, H, W). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (b, c, K, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
 
     :param Tuple[int] position: Position of the PSF patch (row, column)
     :param Tuple[int] overlap: Overlap between PSF patches
@@ -244,62 +237,15 @@ def get_psf_product_convolution2d_patches(h: Tensor, w: Tensor, position: Tuple[
     :return: PSF at the given position (B, C, psf_size, psf_size)
     """
     patch_size = w.shape[-2:]
-    if isinstance(overlap, int):
-        overlap = (overlap, overlap)
+    overlap = as_pair(overlap)
+    index_h, index_w, patch_position_h, patch_position_w = get_index_and_position_2(
+        position.tolist(), patch_size, overlap, num_patches)
 
-    p = patch_size
-    o = overlap
-    n = (math.floor(position[0] / (p[0] - o[0])),
-         math.floor(position[1] / (p[1] - o[1])))
+    h = h.view(h.size(0), h.size(
+        1), num_patches[0], num_patches[1], h.size(3), h.size(4))
 
-    index_h = []
-    index_w = []
-    patch_position_h = []
-    patch_position_w = []
-    # position = (position[0] - psf_size[0] + 1, position[1] - psf_size[0] + 1)
-
-    if n[0] == 0:
-        index_h.append(n[0])
-        patch_position_h.append(position[0])
-    elif n[0] == num_patches[0] and position[0] < n[0] * (p[0] - o[0]) + o[0]:
-        index_h.append(n[0] - 1)
-        patch_position_h.append(position[0] - (n[0] - 1) * (p[0] - o[0]))
-
-    elif n[0] > num_patches[0]:
-        pass
-    else:
-        if position[0] <= n[0] * (p[0] - o[0]) + o[0]:
-            index_h.extend([n[0] - 1, n[0]])
-            patch_position_h.extend([
-                position[0] - (n[0] - 1) * (p[0] - o[0]), position[0] - n[0] * (p[0] - o[0])])
-        else:
-            index_h.append(n[0])
-            patch_position_h.append(
-                position[0] - n[0] * (p[0] - o[0]))
-
-    if n[1] == 0:
-        index_w.append(n[1])
-        patch_position_w.append(position[1] - n[1] * (p[1] - o[1]))
-    elif n[1] == num_patches[1] and position[1] < n[1] * (p[1] - o[1]) + o[1]:
-        index_w.append(n[1] - 1)
-        patch_position_w.append(position[1] - (n[1] - 1) * (p[1] - o[1]))
-    elif n[1] > num_patches[1] - 1:
-        pass
-    else:
-        if position[1] <= n[1] * (p[1] - o[1]) + o[1]:
-            index_w.extend([n[1] - 1, n[1]])
-            patch_position_w.extend([
-                position[1] - (n[1] - 1) * (p[1] - o[1]), position[1] - n[1] * (p[1] - o[1])])
-        else:
-            index_w.append(n[1])
-            patch_position_w.append(
-                position[1] - n[1] * (p[1] - o[1]))
-
-    h = h.view(num_patches[0], num_patches[1], h.size(
-        1), h.size(2), h.size(3), h.size(4))
-
-    w = w.view(num_patches[0], num_patches[1], w.size(
-        1), w.size(2), w.size(3), w.size(4))
+    w = w.view(w.size(0), w.size(
+        1), num_patches[0], num_patches[1], w.size(3), w.size(4))
 
     if len(index_h) == 0 * len(index_w) == 0:
         raise ValueError(
@@ -309,110 +255,25 @@ def get_psf_product_convolution2d_patches(h: Tensor, w: Tensor, position: Tuple[
     psf = 0.
     for count_i, i in enumerate(index_h):
         for count_j, j in enumerate(index_w):
-            psf = psf + h[i, j, ...] * w[i, j,
-                                         ...,
-                                         patch_position_h[count_i]: patch_position_h[count_i]+1,
-                                         patch_position_w[count_j]: patch_position_w[count_j]+1]
-
-    # Method 2: Advanced indexing (a little faster)
-    # index_h = torch.tensor(index_h, dtype=torch.long, device=h.device)
-    # index_w = torch.tensor(index_w, dtype=torch.long, device=h.device)
-    # patch_position_h = torch.tensor(
-    #     patch_position_h, dtype=torch.long, device=h.device)
-    # patch_position_w = torch.tensor(
-    #     patch_position_w, dtype=torch.long, device=h.device)
-
-    # h_selected = h[index_h[:, None], index_w[None, :], ...]
-    # w_selected = w[index_h[:, None], index_w[None, :], ...,
-    #                 patch_position_h[:, None], patch_position_w[None, :]]
-    # psf = torch.sum(h_selected * w_selected[..., None, None], dim=(0, 1))
+            psf = psf + h[:, :, i, j, ...] * w[:, :, i, j,
+                                               patch_position_h[count_i]: patch_position_h[count_i]+1,
+                                               patch_position_w[count_j]: patch_position_w[count_j]+1]
     return psf.flip((-1, -2))
 
 
-def get_psf_product_convolution2d_patches_v2(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
+def get_psf_pconv2d_patch_optimized(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
     r"""
     Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d_patches` function.
 
-    :param torch.Tensor w: Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
-
-    :param Tuple[int] position: Position of the PSF patch (B, 2)
-    :param Tuple[int] overlap: Overlap between PSF patches
-    :param Tuple[int] num_patches: Number of PSF patches
-
-
-    :return: PSF at the given position (B, C, psf_size, psf_size)
-    """
-    patch_size = w.shape[-2:]
-    index_h = []
-    index_w = []
-    patch_position_h = []
-    patch_position_w = []
-    for p in position:
-        ih, iw, ph, pw = get_index_and_position(
-            p.tolist(), patch_size, overlap, num_patches)
-        if len(ih) == 0 or len(iw) == 0:
-            raise ValueError(
-                f'The position center {p} is not valid for PSF of shape {h.shape} and image of shape {w.shape[-2:]}')
-        index_h.append(ih)
-        index_w.append(iw)
-        patch_position_h.append(ph)
-        patch_position_w.append(pw)
-
-    # (B, x)
-    index_h = torch.tensor(index_h, device=h.device, dtype=torch.long)
-    index_w = torch.tensor(index_w, device=h.device, dtype=torch.long)
-    patch_position_h = torch.tensor(
-        patch_position_h, device=h.device, dtype=torch.long)
-    patch_position_w = torch.tensor(
-        patch_position_w, device=h.device, dtype=torch.long)
-
-    # Reshape the PSF and the multipliers
-    h = h.view(num_patches[0], num_patches[1], h.size(
-        1), h.size(2), h.size(3), h.size(4))
-
-    w = w.view(num_patches[0], num_patches[1], w.size(
-        1), w.size(2), w.size(3), w.size(4))
-
-    batch_index = torch.arange(h.size(2), device=h.device, dtype=torch.long)
-    # print('h', h.shape)
-    # print('w', w.shape)
-    # print('index_h', index_h.shape)
-    # print('index_w', index_w.shape)
-    # print('patch_position_h', patch_position_h.shape)
-    # print('patch_position_w', patch_position_w.shape)
-
-    h_selected = h[index_h[:, None, :],
-                   index_w[:, :, None],
-                   batch_index[:, None, None],
-                   ...]
-    w_selected = w[index_h[:, None, :],
-                   index_w[:, :, None],
-                   torch.arange(w.size(2), device=w.device,
-                                dtype=torch.long)[:, None, None],
-                   ...,
-                   patch_position_h[:, None, :],
-                   patch_position_w[:, :, None]]
-
-    # print(h_selected.shape, w_selected.shape)
-    psf = torch.sum(h_selected * w_selected[..., None, None], dim=(1, 2))
-
-    return psf.flip((-1, -2)) if isinstance(psf, torch.Tensor) else psf
-
-
-def get_psf_product_convolution2d_patches_v3(h: Tensor, w: Tensor, position: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
-    r"""
-    Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d_patches` function.
-
-    :param torch.Tensor w: Tensor of size (K, b, C, H, W). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, B, C, h, w). h<=H and w<=W
+    :param torch.Tensor w: Tensor of size (b, C, K, H, W). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (B, C, K, h, w). h<=H and w<=W
 
     :param Tuple[int] position: Position of the PSF patch (B, N, 2)
     :param Tuple[int] overlap: Overlap between PSF patches
     :param Tuple[int] num_patches: Number of PSF patches
 
 
-    :return: PSF at the given position (B, N, C, psf_size, psf_size)
+    :return: PSF at the given position (B, C, N, psf_size, psf_size)
     """
     patch_size = w.shape[-2:]
     index_h = []
@@ -420,41 +281,38 @@ def get_psf_product_convolution2d_patches_v3(h: Tensor, w: Tensor, position: Tup
     patch_position_h = []
     patch_position_w = []
 
+    B, N = position.shape[:2]
     # Possible to use torch.vmap to parallelize these loops
-    for b in range(position.size(0)):
-        for n in range(position.size(1)):
-            ih, iw, ph, pw = get_index_and_position(
+    for b in range(B):
+        for n in range(N):
+            ih, iw, ph, pw = get_index_and_position_2(
                 position[b, n].tolist(), patch_size, overlap, num_patches)
 
             index_h.append(ih)
             index_w.append(iw)
             patch_position_h.append(ph)
             patch_position_w.append(pw)
+    index_h = pad_sublist(index_h)
+    index_w = pad_sublist(index_w)
+    patch_position_h = pad_sublist(patch_position_h)
+    patch_position_w = pad_sublist(patch_position_w)
 
-    # from functools import partial
-    # func = partial(
-    #     get_index_and_position, patch_size=patch_size, overlap=overlap, num_patches=num_patches)
-    # func_vmap = torch.vmap(
-    #     torch.vmap(func, in_dims=(0)), in_dims=0)
-    # print(func_vmap(position))
-    # (B, N, x)
+
     index_h = torch.tensor(index_h, device=h.device, dtype=torch.long).view(
-        position.size(0), position.size(1), -1)
+        B, N, -1)
     index_w = torch.tensor(index_w, device=h.device, dtype=torch.long).view(
-        position.size(0), position.size(1), -1)
+        B, N, -1)
     patch_position_h = torch.tensor(
-        patch_position_h, device=h.device, dtype=torch.long).view(position.size(0), position.size(1), -1)
+        patch_position_h, device=h.device, dtype=torch.long).view(B, N, -1)
     patch_position_w = torch.tensor(
-        patch_position_w, device=h.device, dtype=torch.long).view(position.size(0), position.size(1), -1)
+        patch_position_w, device=h.device, dtype=torch.long).view(B, N, -1)
 
     # Reshape the PSF and the multipliers
-    h = h.view(num_patches[0], num_patches[1], h.size(
-        1), h.size(2), h.size(3), h.size(4))
+    h = h.view(h.size(0), h.size(
+        1), num_patches[0], num_patches[1], h.size(3), h.size(4))
+    w = w.view(w.size(0), w.size(
+        1), num_patches[0], num_patches[1], w.size(3), w.size(4))
 
-    w = w.view(num_patches[0], num_patches[1], w.size(
-        1), w.size(2), w.size(3), w.size(4))
-
-    batch_index = torch.arange(h.size(2), device=h.device, dtype=torch.long)
     # print('h', h.shape)
     # print('w', w.shape)
     # print('index_h', index_h.shape)
@@ -462,22 +320,25 @@ def get_psf_product_convolution2d_patches_v3(h: Tensor, w: Tensor, position: Tup
     # print('patch_position_h', patch_position_h.shape)
     # print('patch_position_w', patch_position_w.shape)
 
-    h_selected = h[index_h[..., None, :],
-                   index_w[..., :, None],
-                   batch_index[:, None, None, None],
-                   ...]
-    w_selected = w[index_h[..., None, :],
-                   index_w[..., :, None],
-                   torch.arange(w.size(2), device=w.device,
+    h_selected = h[torch.arange(h.size(0), device=h.device,
                                 dtype=torch.long)[:, None, None, None],
-                   ...,
+                   :,
+                   index_h[..., None, :],
+                   index_w[..., :, None],
+                   ...]
+    w_selected = w[torch.arange(w.size(0), device=w.device,
+                                dtype=torch.long)[:, None, None, None],
+                   :,
+                   index_h[..., None, :],
+                   index_w[..., :, None],
                    patch_position_h[..., None, :],
                    patch_position_w[..., :, None]]
 
     # print(h_selected.shape, w_selected.shape)
     psf = torch.sum(h_selected * w_selected[..., None, None], dim=(2, 3))
+    return psf.flip((-1, -2)).transpose(1, 2)
 
-    return psf.flip((-1, -2))
+
 # UTILITY FUNCTIONS
 
 
@@ -544,6 +405,63 @@ def get_index_and_position(position: Tuple[int],  patch_size: Tuple[int], overla
             patch_position_w.append(
                 position[1] - n[1] * (p[1] - o[1]))
 
+    if len(index_h) == 0 or len(index_w) == 0:
+        raise ValueError(
+            f'The position center {position} is not valid.')
+    return index_h, index_w, patch_position_h, patch_position_w
+
+
+def get_index_and_position_2(position: Tuple[int],  patch_size: Tuple[int], overlap: Tuple[int], num_patches: Tuple[int]):
+    r"""
+    Get the PSF index at the given position of the :meth:`deepinv.physics.functional.product_convolution2d_patches` function.
+
+    :param Tuple[int] position: Position of the point of which we want to infer the PSf (row, column)
+    :param Tuple[int] overlap: Overlap between PSF patches
+    :param Tuple[int] num_patches: Number of PSF patches
+
+
+    :return: index_h, index_w, patch_position_h, patch_position_w
+    """
+    overlap = as_pair(overlap)
+    patch_size = as_pair(patch_size)
+    stride = add_tuple(patch_size, overlap, -1)
+
+    if isinstance(position, torch.Tensor):
+        position = position.tolist()
+
+    max_size = (patch_size[0] + (num_patches[0] - 1) * stride[0],
+                patch_size[1] + (num_patches[1] - 1) * stride[1])
+
+    n_min = (math.floor((position[0] - patch_size[0]) / stride[0]),
+             math.floor((position[1] - patch_size[1]) / stride[1]))
+    n_min = (max(n_min[0], 0), max(n_min[1], 0))
+    n_max = (math.floor(position[0] / stride[0]),
+             math.floor(position[1] / stride[1]))
+
+    index_h = []
+    index_w = []
+    patch_position_h = []
+    patch_position_w = []
+    # VERTICAL INDEX
+    # i = n[0]
+    for i in range(n_min[0], n_max[0] + 1):
+        left = i * stride[0]
+        right = left + patch_size[0]
+
+        if (left <= position[0]) and (position[0] < right) and (right <= max_size[0]):
+            index_h.append(i)
+            patch_position_h.append(position[0] - i * stride[0])
+
+    # HORIZONTAL INDEX
+    for j in range(n_min[1], n_max[1] + 1):
+        left = j * stride[1]
+        right = left + patch_size[1]
+
+        if (left <= position[1]) and (position[1] < right) and (right <= max_size[1]):
+            index_w.append(j)
+            patch_position_w.append(position[1] - j * stride[1])
+
+    # print(index_h, index_w, patch_position_h, patch_position_w)
     if len(index_h) == 0 or len(index_w) == 0:
         raise ValueError(
             f'The position center {position} is not valid.')
@@ -655,7 +573,6 @@ def crop_unity_partition_2d(masks, patch_size: Tuple[int], overlap: Tuple[int], 
 def image_to_patches(image: Tuple[int], patch_size: Tuple[int], overlap: Tuple[int]):
     """
     Splits an image into patches with specified patch size and overlap.
-
     The image will be cropped to the appropriate size so that all patches have the same size.
 
     Parameters:
@@ -665,18 +582,16 @@ def image_to_patches(image: Tuple[int], patch_size: Tuple[int], overlap: Tuple[i
 
     Returns:
         torch.Tensor: Batch of patches of shape (B, C, n_rows, n_cols, patch_size, patch_size).
+
     """
-    if isinstance(patch_size, int):
-        patch_size = (patch_size, patch_size)
-    if isinstance(overlap, int):
-        overlap = (overlap, overlap)
+    patch_size = as_pair(patch_size)
+    overlap = as_pair(overlap)
 
     # Ensure image is a tensor
     if not isinstance(image, torch.Tensor):
         raise TypeError("Image should be a torch.Tensor")
 
     stride = (patch_size[0] - overlap[0], patch_size[1] - overlap[1])
-
     # Ensure the patch size and overlap are valid
     assert (stride[0] > 0) * (stride[1] >
                               0), "Patch size must be greater than overlap"
@@ -688,7 +603,8 @@ def image_to_patches(image: Tuple[int], patch_size: Tuple[int], overlap: Tuple[i
 
 def patches_to_image(patches: Tuple[int], overlap: Tuple[int]):
     """
-    Reconstruct a batch of images from patches
+    Reconstruct a batch of images from patches.
+    This function is the reverse of  `patches_to_image`
 
     Parameters:
         patches (torch.Tensor): Input image tensor of shape (B, C, n_rows, n_cols, patch_size, patch_size).
@@ -705,7 +621,6 @@ def patches_to_image(patches: Tuple[int], overlap: Tuple[int]):
 
     output_size = (h + (num_patches_h - 1) * (h - overlap[0]),
                    w + (num_patches_w - 1) * (w - overlap[1]))
-    # print(output_size)
     if not isinstance(patches, torch.Tensor):
         raise TypeError("Patches should be a torch.Tensor")
 
@@ -721,7 +636,7 @@ def patches_to_image(patches: Tuple[int], overlap: Tuple[int]):
     patches = patches.view(B, num_patches, C * h * w).permute(0, 2, 1)
     stride = (h - overlap[0], w - overlap[1])
     # Fold the patches back into the image
-    output = torch.nn.functional.fold(
+    output = F.fold(
         patches,
         output_size=output_size,
         kernel_size=(h, w),
@@ -746,6 +661,42 @@ def add_tuple(a: tuple, b: tuple, constant: float = 1) -> tuple:
     return tuple(a[i] + constant * b[i] for i in range(len(a)))
 
 
+def as_pair(input: Union[Tuple, int]):
+    r"""
+    Make sure that the input is a pair.
+
+    :param Union[Tuple, int] input: Input to be made a pair.
+
+    :return: (Tuple) a pair of the input, if it is already a pair, or a pair with the input and itself.
+    """
+    if isinstance(input, int):
+        return (input, input)
+    elif isinstance(input, (tuple, list)):
+        return input
+
+
+def pad_sublist(input: List):
+    """
+    Pads each sublist in the given list of `input` to ensure all sublists 
+    have the same length as the longest sublist.
+
+    The padding is done by repeating the last values of each sublist
+
+    :param list input: List of lists where each sublist may have varying lengths.
+
+    :return: A new list of lists where all sublists have the same length.
+    :Example:
+
+    >>> input = [[1, 2, 3], [4, 5], [6]]
+    >>> pad_sublists(input, padding_value=0)
+    [[1, 2, 3], [4, 5, 0], [6, 0, 0]]
+    """
+    max_length = max(len(sublist) for sublist in input)
+    padded_lst = [sublist + [sublist[-1]] *
+                  (max_length - len(sublist)) for sublist in input]
+    return padded_lst
+
+
 def compute_patch_info(image_size: Tuple[int], patch_size: Tuple[int], overlap: Tuple[int]):
     r"""
     Compute all information about the patches generated from the given image of image_size.
@@ -760,12 +711,10 @@ def compute_patch_info(image_size: Tuple[int], patch_size: Tuple[int], overlap: 
         - max_size (height, width): the size of image which can be split into patches.
             Pixels from max_size to image_size will be cropped.
     """
-    if isinstance(image_size, int):
-        image_size = (image_size, image_size)
-    if isinstance(patch_size, int):
-        patch_size = (patch_size, patch_size)
-    if isinstance(overlap, int):
-        overlap = (overlap, overlap)
+
+    image_size = as_pair(image_size)
+    patch_size = as_pair(patch_size)
+    overlap = as_pair(overlap)
 
     stride = add_tuple(patch_size, overlap, -1)
     num_patches = ((image_size[0] - patch_size[0]) // stride[0] + 1,
@@ -812,10 +761,3 @@ def bump_function(x, a=1.0, b=1.0):
     v[I] = torch.exp(-1.0 / (1.0 - ((torch.abs(x[I]) - a) / b)
                      ** 2)) / np.exp(-1.0)
     return v
-
-
-def as_pair(input: Union[Tuple, int]):
-    if isinstance(input, int):
-        return (input, input)
-    elif isinstance(input, tuple):
-        return input

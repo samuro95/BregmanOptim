@@ -13,8 +13,9 @@ from deepinv.physics.functional import (
     product_convolution2d_adjoint,
     product_convolution2d_patches,
     product_convolution2d_adjoint_patches,
-    get_psf_product_convolution2d,
-    get_psf_product_convolution2d_patches,
+    get_psf_pconv2d_eigen,
+    get_psf_pconv2d_patch,
+    get_psf_pconv2d_patch_optimized,
     conv3d_fft,
     conv_transpose3d_fft,
 )
@@ -437,15 +438,18 @@ class SpaceVaryingBlur(LinearPhysics):
 
     """
 
-    def __init__(self, filters=None, multipliers=None, padding=None, method: str = 'product_convolution2d', patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
+    def __init__(self, filters=None, multipliers=None, padding=None, method: str = 'product_convolution2d', patch_size: Tuple[int] = None, overlap: Tuple[int] = None, image_size: Tuple[int] = None, device='cpu', **kwargs):
         super().__init__(**kwargs)
         self.method = method
+        self.device = device
         if method == 'product_convolution2d_patch':
             self.patch_size = patch_size
             self.overlap = overlap
 
         self.update_parameters(filters, multipliers, padding)
-        self.image_size = None
+        self.image_size = image_size
+        if all(var is not None for var in [image_size, patch_size, overlap]):
+            self.update_patch_info(image_size, patch_size, overlap)
 
     def A(
         self, x: Tensor, filters=None, multipliers=None, padding=None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, ** kwargs
@@ -497,8 +501,8 @@ class SpaceVaryingBlur(LinearPhysics):
         It can receive new parameters :math:`w_k`, :math:`h_k` and padding to be used in the forward operator, and stored
         as the current parameters.
 
-        :param torch.Tensor h: Filters :math:`h_k`. Tensor of size (K, b, c, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
-        :param torch.Tensor w: Multipliers :math:`w_k`. Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
+        :param torch.Tensor h: Filters :math:`h_k`. Tensor of size (b, c, K, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
+        :param torch.Tensor w: Multipliers :math:`w_k`. Tensor of size (b, c, K, H, W). b in {1, B} and c in {1, C}
         :param padding: options = ``'valid'``, ``'circular'``, ``'replicate'``, ``'reflect'``.
             If `padding = 'valid'` the blurred output is smaller than the image (no padding),
             otherwise the blurred output has the same size as the image.
@@ -530,11 +534,17 @@ class SpaceVaryingBlur(LinearPhysics):
         r"""
         :param torch.Tensor centers: (B, num_center_per_batch, 2)
 
-        :return: (num_patch_psf, B, C, psf_size, psf_size)
+        :return: (B, C, num_center_per_batch, psf_size, psf_size)
         """
         self.update_parameters(**kwargs)
         h = self.filters
         w = self.multipliers
+
+        if not isinstance(centers, Tensor):
+            centers = torch.tensor(centers, device=self.device)[None, None]
+
+        if centers.size(0) != h.size(0):
+            centers = centers.expand(h.size(0), -1, -1)
 
         if self.method == "product_convolution2d_patch":
             if patch_size is not None:
@@ -552,66 +562,41 @@ class SpaceVaryingBlur(LinearPhysics):
             for k in range(centers.size(1)):
                 position = centers[b, k, :]
                 if self.method == 'product_convolution2d':
-                    psf.append(get_psf_product_convolution2d(
-                        h[:, b:b+1, ...], w[:, b:b+1, ...], position))
+                    psf.append(get_psf_pconv2d_eigen(
+                        h[b:b+1, ...], w[b:b+1, ...], position))
                 elif self.method == 'product_convolution2d_patch':
-                    psf.append(get_psf_product_convolution2d_patches(
-                        h[:, b:b+1, ...], w, position, overlap=self.overlap, num_patches=self.num_patches))
-        return torch.stack(psf, dim=0)
+                    psf.append(get_psf_pconv2d_patch(
+                        h[b:b+1, ...], w, position, overlap=self.overlap, num_patches=self.num_patches))
+        psf = torch.cat(psf, dim=0)
+        return psf.view(centers.size(0), centers.size(1), psf.size(1), psf.size(2), -1).transpose(1, 2)
 
-    def get_psf_2(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
+    def get_psf_optimized(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
         r"""
         :param torch.Tensor centers: (B, num_center_per_batch, 2)
-
-        :return: (B, num_center_per_batch, C, psf_size, psf_size)
+        :return: (B, C, num_center_per_batch, psf_size, psf_size)
         """
         self.update_parameters(**kwargs)
         h = self.filters
         w = self.multipliers
+        if isinstance(centers, (tuple, list)):
+            centers = torch.tensor(centers, device=self.device)[None, None]
+
+        if centers.size(0) != h.size(0):
+            centers = centers.expand(h.size(0), -1, -1)
 
         if self.method == "product_convolution2d_patch":
             if patch_size is not None:
                 self.patch_size = patch_size
             if overlap is not None:
                 self.overlap = overlap
-
             self.update_patch_info(
                 self.image_size, self.patch_size, self.overlap)
             self.check_patch_info()
+            # Clipping the center to valid locations
+            centers[..., 0].clamp_(max=self.max_image_size[0])
+            centers[..., 1].clamp_(max=self.max_image_size[1])
 
-        psf = []
-        if self.method == 'product_convolution2d_patch':
-            for k in range(centers.size(1)):
-                position = centers[:, k, :]
-                psf.append(get_psf_product_convolution2d_patches_v2(
-                    h, w, position, overlap=self.overlap, num_patches=self.num_patches))
-        else:
-            raise ValueError(f'Unsupported method {self.method}')
-        return torch.stack(psf, dim=1)
-
-    def get_psf_3(self, centers: Tensor = None, patch_size: Tuple[int] = None, overlap: Tuple[int] = None, **kwargs):
-        r"""
-        :param torch.Tensor centers: (B, num_center_per_batch, 2)
-
-        :return: (B, num_center_per_batch, C, psf_size, psf_size)
-        """
-        self.update_parameters(**kwargs)
-        h = self.filters
-        w = self.multipliers
-
-        if self.method == "product_convolution2d_patch":
-            if patch_size is not None:
-                self.patch_size = patch_size
-            if overlap is not None:
-                self.overlap = overlap
-
-            self.update_patch_info(
-                self.image_size, self.patch_size, self.overlap)
-            self.check_patch_info()
-
-        psf = []
-        if self.method == 'product_convolution2d_patch':
-            psf = get_psf_product_convolution2d_patches_v3(
+            psf = get_psf_pconv2d_patch_optimized(
                 h, w, centers, overlap=self.overlap, num_patches=self.num_patches)
         else:
             raise ValueError(f'Unsupported method {self.method}')
@@ -626,10 +611,11 @@ class SpaceVaryingBlur(LinearPhysics):
         :param padding: options = ``'valid'``, ``'circular'``, ``'replicate'``, ``'reflect'``.
         """
         if filters is not None:
-            self.filters = torch.nn.Parameter(filters, requires_grad=False)
+            self.filters = torch.nn.Parameter(
+                filters.to(self.device), requires_grad=False)
         if multipliers is not None:
             self.multipliers = torch.nn.Parameter(
-                multipliers, requires_grad=False)
+                multipliers.to(self.device), requires_grad=False)
         if padding is not None:
             self.padding = padding
 
@@ -644,8 +630,10 @@ class SpaceVaryingBlur(LinearPhysics):
         self.image_size = image_size
         self.patch_size = patch_size
         self.overlap = overlap
-        self.num_patches = compute_patch_info(
-            image_size, patch_size, overlap)['num_patches']
+        info = compute_patch_info(
+            image_size, patch_size, overlap)
+        self.num_patches = info['num_patches']
+        self.max_image_size = info['max_size']
 
     def check_patch_info(self):
         if self.patch_size is None or self.overlap is None:
