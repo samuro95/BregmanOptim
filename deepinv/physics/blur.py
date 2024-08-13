@@ -14,6 +14,7 @@ from deepinv.physics.functional import (
     product_convolution2d_patches,
     product_convolution2d_adjoint_patches,
     get_psf_pconv2d_eigen,
+    get_psf_pconv2d_eigen_optimized,
     get_psf_pconv2d_patch,
     get_psf_pconv2d_patch_optimized,
     conv3d_fft,
@@ -543,14 +544,14 @@ class SpaceVaryingBlur(LinearPhysics):
         if not isinstance(centers, Tensor):
             centers = torch.tensor(centers, device=self.device)[None, None]
 
-        if centers.size(0) != h.size(0):
-            centers = centers.expand(h.size(0), -1, -1)
-
         if self.method == "product_convolution2d_patch":
             if patch_size is not None:
                 self.patch_size = patch_size
             if overlap is not None:
                 self.overlap = overlap
+
+            if centers.size(0) != h.size(0):
+                centers = centers.expand(h.size(0), -1, -1)
 
             self.update_patch_info(
                 self.image_size, self.patch_size, self.overlap)
@@ -597,8 +598,8 @@ class SpaceVaryingBlur(LinearPhysics):
 
             psf = get_psf_pconv2d_patch_optimized(
                 h, w, centers, overlap=self.overlap, num_patches=self.num_patches)
-        else:
-            raise ValueError(f'Unsupported method {self.method}')
+        elif self.method == 'product_convolution2d':
+            psf = get_psf_pconv2d_eigen_optimized(h, w, centers)
         return psf
 
     def update_parameters(self, filters=None, multipliers=None, padding=None, **kwargs):

@@ -24,6 +24,7 @@ from .product_convolution import (
     product_convolution2d_patches,
     product_convolution2d_adjoint_patches,
     get_psf_pconv2d_eigen,
+    get_psf_pconv2d_eigen_optimized,
     get_psf_pconv2d_patch,
     get_psf_pconv2d_patch_optimized
 )

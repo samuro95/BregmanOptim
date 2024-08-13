@@ -598,11 +598,11 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
     ) -> None:
         super().__init__(**kwargs)
         self.psf_generator = psf_generator
-        self.img_size = img_size
+        self.img_size = as_pair(img_size)
         self.n_eigen_psf = n_eigen_psf
         self.spacing = (
             spacing if spacing is not None else (
-                img_size[0] // 8, img_size[1] // 8)
+                self.img_size[0] // 8, self.img_size[1] // 8)
         )
         self.padding = padding
 
@@ -626,7 +626,7 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
         psfs_reshape = psfs.reshape(n_psf, psf_size * psf_size)
         U, S, V = torch.svd_lowrank(psfs_reshape, q=self.n_eigen_psf)
         eigen_psf = (V.T).reshape(self.n_eigen_psf,
-                                  psf_size, psf_size)[:, None, None]
+                                  psf_size, psf_size)[None, None]
         coeffs = psfs_reshape @ V
 
         # Interpolating the psfs coefficients with Thinplate splines
@@ -640,7 +640,7 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
         T1 = torch.linspace(0, 1, n1, **self.factory_kwargs)
         yy, xx = torch.meshgrid(T0, T1)
         w = tps.transform(torch.stack((yy.flatten(), xx.flatten()), dim=1)).T
-        w = w.reshape(self.n_eigen_psf, n0, n1)[:, None, None]
+        w = w.reshape(self.n_eigen_psf, n0, n1)[None, None]
 
         # Ending
         params_blur = {"filters": eigen_psf, "multipliers": w, "padding": self.padding}

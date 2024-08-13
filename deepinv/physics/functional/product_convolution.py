@@ -33,21 +33,19 @@ def product_convolution2d(
     where :math:`\star` is a convolution, :math:`\odot` is a Hadamard product, :math:`w_k` are multipliers :math:`h_k` are filters.
 
     :param torch.Tensor x: Tensor of size (B, C, H, W)
-    :param torch.Tensor w: Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
+    :param torch.Tensor w: Tensor of size (b, c, K, H, W). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (b, c, K, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
     :param padding: ( options = `valid`, `circular`, `replicate`, `reflect`. If `padding = 'valid'` the blurred output is smaller than the image (no padding), otherwise the blurred output has the same size as the image.
 
     :return: torch.Tensor y
     :rtype: tuple
     """
 
-    K = w.shape[0]
+    K = w.size(2)
+    result = 0.
     for k in range(K):
-        if k == 0:
-            result = conv2d(multiplier(x, w[k]), h[k], padding=padding)
-        else:
-            result += conv2d(multiplier(x, w[k]), h[k], padding=padding)
-
+        result = result + \
+            conv2d(multiplier(x, w[:, :, k]), h[:, :, k], padding=padding)
     return result
 
 
@@ -59,35 +57,50 @@ def product_convolution2d_adjoint(
     Product-convolution adjoint operator in 2d.
 
     :param torch.Tensor x: Tensor of size (B, C, ...)
-    :param torch.Tensor w: Tensor of size (K, b, c, ...)
-    :param torch.Tensor h: Tensor of size (K, b, c, ...)
+    :param torch.Tensor w: Tensor of size (b, c, K,...)
+    :param torch.Tensor h: Tensor of size (b, c, K, ...)
     :param padding: options = ``'valid'``, ``'circular'``, ``'replicate'``, ``'reflect'``.
         If `padding = 'valid'` the blurred output is smaller than the image (no padding),
         otherwise the blurred output has the same size as the image.
     """
 
-    K = w.shape[0]
+    K = w.size(2)
+    result = 0.
     for k in range(K):
-        if k == 0:
-            result = multiplier_adjoint(
-                conv_transpose2d(y, h[k], padding=padding), w[k]
-            )
-        else:
-            result += multiplier_adjoint(
-                conv_transpose2d(y, h[k], padding=padding), w[k]
-            )
-
+        result += multiplier_adjoint(
+            conv_transpose2d(y, h[:, :, k], padding=padding), w[:, :, k]
+        )
     return result
 
 
 def get_psf_pconv2d_eigen(h, w, position: Tuple[int]):
     r"""
     Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d` function.
-    :param torch.Tensor w: Tensor of size (K, b, c, H, W). b in {1, B} and c in {1, C}
-    :param torch.Tensor h: Tensor of size (K, b, c, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
+    :param torch.Tensor w: Tensor of size (b, c, K, H, W). b in {1, B} and c in {1, C}
+    :param torch.Tensor h: Tensor of size (b, c, K, h, w). b in {1, B} and c in {1, C}, h<=H and w<=W
     :param Tuple[int] position: Position of the PSF patch
     """
-    return torch.sum(h * w[..., position[0]:position[0]+1, position[1]:position[1] + 1], dim=0).flip((-1, -2))
+    return torch.sum(h * w[..., position[0]:position[0]+1, position[1]:position[1] + 1], dim=2).flip((-1, -2))
+
+
+def get_psf_pconv2d_eigen_optimized(h, w, position):
+    r"""
+    Get the PSF at the given position of the :meth:`deepinv.physics.functional.product_convolution2d` function.
+    :param torch.Tensor w: Tensor of size (B, C, K, H, W). 
+    :param torch.Tensor h: Tensor of size (B, C, K, h, w). 
+    :param torch.Tensor position: Position of the PSF, a Tensor of size (B, n_position, 2)
+
+    :return torch.Tensor: PSF at position of shape (B, C, n_position, psf_size, psf_size)
+    """
+    batch_index = torch.arange(w.size(0), dtype=torch.long, device=w.device)
+    position_h = position[..., 0:1]
+    position_w = position[..., 1:2]
+    w_selected = w[batch_index[:, None, None],
+                   ...,
+                   position_h,
+                   position_w,
+                   ].squeeze(2).transpose(1, 2)
+    return torch.sum(h[:, :, None, ...] * w_selected[..., None, None], dim=3).flip((-1, -2))
 
 # METHOD 2: PRODUCT CONVOLUTION USING PATCHES
 
@@ -297,7 +310,6 @@ def get_psf_pconv2d_patch_optimized(h: Tensor, w: Tensor, position: Tuple[int], 
     patch_position_h = pad_sublist(patch_position_h)
     patch_position_w = pad_sublist(patch_position_w)
 
-
     index_h = torch.tensor(index_h, device=h.device, dtype=torch.long).view(
         B, N, -1)
     index_w = torch.tensor(index_w, device=h.device, dtype=torch.long).view(
@@ -313,12 +325,12 @@ def get_psf_pconv2d_patch_optimized(h: Tensor, w: Tensor, position: Tuple[int], 
     w = w.view(w.size(0), w.size(
         1), num_patches[0], num_patches[1], w.size(3), w.size(4))
 
-    # print('h', h.shape)
-    # print('w', w.shape)
-    # print('index_h', index_h.shape)
-    # print('index_w', index_w.shape)
-    # print('patch_position_h', patch_position_h.shape)
-    # print('patch_position_w', patch_position_w.shape)
+    print('h', h.shape)
+    print('w', w.shape)
+    print('index_h', index_h.shape)
+    print('index_w', index_w.shape)
+    print('patch_position_h', patch_position_h.shape)
+    print('patch_position_w', patch_position_w.shape)
 
     h_selected = h[torch.arange(h.size(0), device=h.device,
                                 dtype=torch.long)[:, None, None, None],
