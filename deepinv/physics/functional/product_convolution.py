@@ -325,12 +325,12 @@ def get_psf_pconv2d_patch_optimized(h: Tensor, w: Tensor, position: Tuple[int], 
     w = w.view(w.size(0), w.size(
         1), num_patches[0], num_patches[1], w.size(3), w.size(4))
 
-    print('h', h.shape)
-    print('w', w.shape)
-    print('index_h', index_h.shape)
-    print('index_w', index_w.shape)
-    print('patch_position_h', patch_position_h.shape)
-    print('patch_position_w', patch_position_w.shape)
+    # print('h', h.shape)
+    # print('w', w.shape)
+    # print('index_h', index_h.shape)
+    # print('index_w', index_w.shape)
+    # print('patch_position_h', patch_position_h.shape)
+    # print('patch_position_w', patch_position_w.shape)
 
     h_selected = h[torch.arange(h.size(0), device=h.device,
                                 dtype=torch.long)[:, None, None, None],
