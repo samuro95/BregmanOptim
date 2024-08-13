@@ -581,9 +581,6 @@ class SpaceVaryingBlur(LinearPhysics):
         if isinstance(centers, (tuple, list)):
             centers = torch.tensor(centers, device=self.device)[None, None]
 
-        if centers.size(0) != h.size(0):
-            centers = centers.expand(h.size(0), -1, -1)
-
         if self.method == "product_convolution2d_patch":
             if patch_size is not None:
                 self.patch_size = patch_size
@@ -593,8 +590,10 @@ class SpaceVaryingBlur(LinearPhysics):
                 self.image_size, self.patch_size, self.overlap)
             self.check_patch_info()
             # Clipping the center to valid locations
-            centers[..., 0].clamp_(max=self.max_image_size[0])
-            centers[..., 1].clamp_(max=self.max_image_size[1])
+            centers[..., 0].clamp_(
+                min=self.patch_size[0] // 2, max=self.max_image_size[0] - self.patch_size[0] // 2)
+            centers[..., 1].clamp_(
+                min=self.patch_size[1] // 2, max=self.max_image_size[1] - self.patch_size[1] // 2)
 
             psf = get_psf_pconv2d_patch_optimized(
                 h, w, centers, overlap=self.overlap, num_patches=self.num_patches)
