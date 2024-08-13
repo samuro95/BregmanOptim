@@ -296,10 +296,10 @@ def get_psf_pconv2d_patch_optimized(h: Tensor, w: Tensor, position: Tuple[int], 
 
     B, N = position.shape[:2]
     # Possible to use torch.vmap to parallelize these loops
-    for b in range(B):
-        for n in range(N):
+    for p in position.tolist():
+        for pos in p:
             ih, iw, ph, pw = get_index_and_position_2(
-                position[b, n].tolist(), patch_size, overlap, num_patches)
+                pos, patch_size, overlap, num_patches)
 
             index_h.append(ih)
             index_w.append(iw)
