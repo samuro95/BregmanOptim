@@ -21,6 +21,7 @@ from deepinv.physics.functional import (
     conv_transpose3d_fft,
 )
 from deepinv.physics.functional.product_convolution import compute_patch_info
+from typing import Tuple
 
 
 class Downsampling(LinearPhysics):
