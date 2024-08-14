@@ -248,8 +248,10 @@ class DiffractionBlurGenerator(PSFGenerator):
         )
         self.pupil_size = pupil_size
 
-        lin_x = torch.linspace(-0.5, 0.5, self.pupil_size[0], **self.factory_kwargs)
-        lin_y = torch.linspace(-0.5, 0.5, self.pupil_size[1], **self.factory_kwargs)
+        lin_x = torch.linspace(-0.5, 0.5,
+                               self.pupil_size[0], **self.factory_kwargs)
+        lin_y = torch.linspace(-0.5, 0.5,
+                               self.pupil_size[1], **self.factory_kwargs)
         self.step_rho = lin_x[1] - lin_x[0]
 
         # Fourier plane is discretized on [-0.5,0.5]x[-0.5,0.5]
@@ -305,7 +307,7 @@ class DiffractionBlurGenerator(PSFGenerator):
         :param int batch_size: batch_size.
         :param torch.Tensor coeff: batch_size x len(list_param) coefficients of the Zernike decomposition (defaults is None)
 
-        :return: dictionary with keys **'filter'**: tensor of size (batch_size x num_channels x psf_size[0] x psf_size[1]) batch of psfs,
+        :return: dictionary with keys **'filter'**: tensor of size (batch_size x num_channels x psf_size[0] x psf_size[1]) batch of psf_grid,
             **'coeff'**: list of sampled Zernike coefficients in this realization, **'pupil'**: the pupil function
         :rtype: dict
         """
@@ -565,10 +567,10 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
     :param deepinv.physics.generator.PSFGenerator psf_generator: A psf generator
         (e.g. ``generator = DiffractionBlurGenerator((1, psf_size, psf_size), fc=0.25)``)
-    :param tuple img_size: image size ``H x W``.
-    :param int n_eigen_psf: each psf in the field of view will be a linear combination of ``n_eigen_psf`` eigen psfs.
+    :param tuple image_size: image size ``H x W``.
+    :param int n_eigen_psf: each psf in the field of view will be a linear combination of ``n_eigen_psf`` eigen psf_grid.
         Defaults to 10.
-    :param tuple spacing: steps between the psfs used for interpolation (defaults ``(H//8, W//8)``).
+    :param tuple spacing: steps between the psf_grid used for interpolation (defaults ``(H//8, W//8)``).
     :param str padding: boundary conditions in (options = ``'valid'``, ``'circular'``, ``'replicate'``, ``'reflect'``).
         Defaults to ``'valid'``.
 
@@ -580,7 +582,7 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
     >>> from deepinv.physics.generator import ProductConvolutionBlurGenerator
     >>> psf_size = 7
     >>> psf_generator = DiffractionBlurGenerator((psf_size, psf_size), fc=0.25)
-    >>> pc_generator = ProductConvolutionBlurGenerator(psf_generator, img_size=(64, 64), n_eigen_psf=8)
+    >>> pc_generator = ProductConvolutionBlurGenerator(psf_generator, image_size=(64, 64), n_eigen_psf=8)
     >>> params = pc_generator.step(0)
     >>> print(params.keys())
     dict_keys(['filters', 'multipliers', 'padding'])
@@ -589,8 +591,8 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
     def __init__(
         self,
-        psf_generator,
-        img_size: Tuple[int],
+        psf_generator: PSFGenerator,
+        image_size: Tuple[int],
         n_eigen_psf: int = 10,
         spacing:  Tuple[int] = None,
         padding: str = "valid",
@@ -598,13 +600,33 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
     ) -> None:
         super().__init__(**kwargs)
         self.psf_generator = psf_generator
-        self.img_size = as_pair(img_size)
+        self.image_size = as_pair(image_size)
         self.n_eigen_psf = n_eigen_psf
         self.spacing = (
             as_pair(spacing) if spacing is not None else (
-                self.img_size[0] // 8, self.img_size[1] // 8)
+                self.image_size[0] // 8, self.image_size[1] // 8)
         )
         self.padding = padding
+
+        self.n_psf_prid = (self.image_size[0] // self.spacing[0]) * \
+            (self.image_size[1] // self.spacing[1])
+
+        # Interpolating the psf_grid coefficients with Thinplate splines
+        T0 = torch.linspace(
+            0, 1, self.image_size[0] // self.spacing[0], **self.factory_kwargs)
+        T1 = torch.linspace(
+            0, 1, self.image_size[1] // self.spacing[1], **self.factory_kwargs)
+        yy, xx = torch.meshgrid(T0, T1)
+        self.X = torch.stack((yy.flatten(), xx.flatten()), dim=1)
+
+        T0 = torch.linspace(
+            0, 1, self.image_size[0], **self.factory_kwargs)
+        T1 = torch.linspace(
+            0, 1, self.image_size[1], **self.factory_kwargs)
+        yy, xx = torch.meshgrid(T0, T1)
+        self.XX = torch.stack((yy.flatten(), xx.flatten()), dim=1)
+
+        self.tps = ThinPlateSpline(0.0, **self.factory_kwargs)
 
     def step(self, batch_size: int = 1, **kwargs):
         r"""
@@ -614,33 +636,33 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
         :returns: a dictionary containing filters, multipliers and paddings.
         """
 
-        # Generating psfs on a grid
-        n0, n1 = self.img_size
-        s0, s1 = self.spacing
+        # Generating psf_grid on a grid
+        psf_grid = self.psf_generator.step(
+            self.n_psf_prid * batch_size)["filter"]
+        psf_size = psf_grid.shape[-2:]
+        psf_grid = psf_grid.view(
+            batch_size, self.n_psf_prid, psf_grid.size(1), *psf_size)
 
-        n_psf = (n0 // s0) * (n1 // s1)
-        psfs = self.psf_generator.step(n_psf)["filter"]
-        psf_size = psfs.shape[-2:]
+        # Computing the eigen-psf
+        # Transform to (B, C, n_psf_prid, psf_size ** 2)
+        psf_grid = psf_grid.flatten(-2, -1).transpose(1, 2)
+        print('psf_grid : ', psf_grid)
+        # _, _, V = torch.linalg.svd(psf_grid, full_matrices=False)
+        # V = V[..., :self.n_eigen_psf, :].transpose(-1, -2)
+        # eigen_psf = V.reshape(V.size(0),
+        #                       V.size(1), self.n_eigen_psf, *psf_size)
 
-        # Computing the eigen-psfs
-        psfs_reshape = psfs.reshape(n_psf, psf_size[0] * psf_size[1])
-        U, S, V = torch.svd_lowrank(psfs_reshape, q=self.n_eigen_psf)
-        eigen_psf = (V.T).reshape(self.n_eigen_psf,
-                                  psf_size[0], psf_size[1])[None, None]
-        coeffs = psfs_reshape @ V
+        _, _, V = torch.svd_lowrank(psf_grid, q=self.n_eigen_psf)
+        print('V :', V)
+        eigen_psf = V.transpose(-1, -2).reshape(V.size(0),
+                                                V.size(1), self.n_eigen_psf, *psf_size)
 
-        # Interpolating the psfs coefficients with Thinplate splines
-        T0 = torch.linspace(0, 1, n0 // s0, **self.factory_kwargs)
-        T1 = torch.linspace(0, 1, n1 // s1, **self.factory_kwargs)
-        yy, xx = torch.meshgrid(T0, T1)
-        X = torch.stack((yy.flatten(), xx.flatten()), dim=1)
-        tps = ThinPlateSpline(0.0, **self.factory_kwargs)
-        tps.fit(X, coeffs)
-        T0 = torch.linspace(0, 1, n0, **self.factory_kwargs)
-        T1 = torch.linspace(0, 1, n1, **self.factory_kwargs)
-        yy, xx = torch.meshgrid(T0, T1)
-        w = tps.transform(torch.stack((yy.flatten(), xx.flatten()), dim=1)).T
-        w = w.reshape(self.n_eigen_psf, n0, n1)[None, None]
+        # (B, C, n_psf_grid, n_eigen_psf)
+        coeffs = torch.matmul(psf_grid, V)
+
+        self.tps.fit(self.X, coeffs)
+        w = self.tps.transform(self.XX).transpose(-1, -2)
+        w = w.reshape(w.size(0), w.size(1), self.n_eigen_psf, *self.image_size)
 
         # Ending
         params_blur = {"filters": eigen_psf, "multipliers": w, "padding": self.padding}
@@ -668,7 +690,7 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
     >>> from deepinv.physics.generator import ProductConvolutionBlurGenerator
     >>> psf_size = 7
     >>> psf_generator = DiffractionBlurGenerator((psf_size, psf_size), fc=0.25)
-    >>> pc_generator = ProductConvolutionBlurGenerator(psf_generator, img_size=(64, 64), n_eigen_psf=8)
+    >>> pc_generator = ProductConvolutionBlurGenerator(psf_generator, image_size=(64, 64), n_eigen_psf=8)
     >>> params = pc_generator.step(0)
     >>> print(params.keys())
     dict_keys(['filters', 'multipliers', 'padding'])
@@ -712,17 +734,10 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
         :param (Optional) tuple[int] overlap: overlap size between patch
 
         :returns: a dictionary containing filters, multipliers and paddings.
-            - filters torch.Tensor: (K, B, C, psf_size, psf_size)
-            - multipliers torch.Tensor: (K, B, C, patch_size, patch_size)
+            - filters torch.Tensor: (B, C, K, psf_size, psf_size)
+            - multipliers torch.Tensor: (B, C, K, patch_size, patch_size)
         """
-        if patch_size is not None:
-            self.patch_size = as_pair(patch_size)
-        if overlap is not None:
-            self.overlap = as_pair(overlap)
-
-        self.num_patches = np.prod(compute_patch_info(
-            self.image_size, self.patch_size, self.overlap)['num_patches'])
-
+        self.update_patch_info(patch_size, overlap)
         params = self.psf_generator.step(
             batch_size * self.num_patches, **kwargs)
 
@@ -739,6 +754,16 @@ class ProductConvolutionPatchBlurGenerator(PhysicsGenerator):
                            **new_params)
 
         return params_blur
+
+    def update_patch_info(self, patch_size: tuple[int] = None, overlap: tuple[int] = None):
+        if patch_size is not None:
+            self.patch_size = as_pair(patch_size)
+        if overlap is not None:
+            self.overlap = as_pair(overlap)
+
+        if patch_size is not None and overlap is not None:
+            self.num_patches = np.prod(compute_patch_info(
+                self.image_size, self.patch_size, self.overlap)['num_patches'])
 
 
 class DiffractionBlurGenerator3D(PSFGenerator):
