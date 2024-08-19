@@ -6,6 +6,7 @@ This example provides a tour of 2D blur operators in DeepInv.
 In particular, we show how to use DiffractionBlurs (Fresnel diffraction), motion blurs and space varying blurs.
 
 """
+
 # %%
 from deepinv.utils.demo import load_url_image, get_image_url
 from deepinv.utils.plotting import plot
@@ -94,8 +95,7 @@ plot(
 # For circular boundary conditions, an FFT implementation is also available. It is slower that :meth:`deepinv.physics.Blur`,
 # but inherits from :meth:`deepinv.physics.DecomposablePhysics`, so that the pseudo-inverse and regularized inverse are computed faster and more accurately.
 #
-physics = dinv.physics.BlurFFT(
-    img_size=x_rgb[0].shape, filter=filter_0, device=device)
+physics = dinv.physics.BlurFFT(img_size=x_rgb[0].shape, filter=filter_0, device=device)
 y = physics(x_rgb)
 plot(
     [x_rgb, filter_0, y],
@@ -127,10 +127,9 @@ plot(
 # %%
 # We can also define color filters. In that situation, each channel is convolved with the corresponding channel of the filter:
 psf_size = 9
-filter_rgb = torch.zeros((1, 3, psf_size, psf_size),
-                         device=device, dtype=dtype)
-filter_rgb[:, 0, :, psf_size // 2: psf_size // 2 + 1] = 1.0 / psf_size
-filter_rgb[:, 1, psf_size // 2: psf_size // 2 + 1, :] = 1.0 / psf_size
+filter_rgb = torch.zeros((1, 3, psf_size, psf_size), device=device, dtype=dtype)
+filter_rgb[:, 0, :, psf_size // 2 : psf_size // 2 + 1] = 1.0 / psf_size
+filter_rgb[:, 1, psf_size // 2 : psf_size // 2 + 1, :] = 1.0 / psf_size
 filter_rgb[:, 2, ...] = (
     torch.diag(torch.ones(psf_size, device=device, dtype=dtype)) / psf_size
 )
@@ -157,8 +156,7 @@ plot(
 # generate 3 motion blurs. First, we instantiate the generator:
 #
 psf_size = 31
-motion_generator = MotionBlurGenerator(
-    (psf_size, psf_size), device=device, dtype=dtype)
+motion_generator = MotionBlurGenerator((psf_size, psf_size), device=device, dtype=dtype)
 # %%
 # To generate new filters, we call the step() function:
 filters = motion_generator.step(batch_size=3)
@@ -308,8 +306,22 @@ psf_grid = physics(dirac_comb)
 plot(psf_grid, titles="Space varying impulse responses")
 
 num_patches = 4
-i = torch.randint(0, img_size[0], (dirac_comb.size(0), num_patches, ))
-j = torch.randint(0, img_size[1], (dirac_comb.size(0), num_patches, ))
+i = torch.randint(
+    0,
+    img_size[0],
+    (
+        dirac_comb.size(0),
+        num_patches,
+    ),
+)
+j = torch.randint(
+    0,
+    img_size[1],
+    (
+        dirac_comb.size(0),
+        num_patches,
+    ),
+)
 centers = torch.stack((i, j), dim=-1)
 psf = physics.get_psf(centers=centers)
 plot(psf.flatten(0, 1))
@@ -329,28 +341,42 @@ patch_psf_generator = ProductConvolutionPatchBlurGenerator(
     patch_size=patch_size,
     overlap=overlap,
 )
-patch_info = {'patch_size': patch_size,
-              'overlap': overlap,
-              'num_patches': compute_patch_info(img_size, patch_size, overlap)['num_patches']}
+patch_info = {
+    "patch_size": patch_size,
+    "overlap": overlap,
+    "num_patches": compute_patch_info(img_size, patch_size, overlap)["num_patches"],
+}
 params_pc = patch_psf_generator.step(batch_size)
 
-patch_physics = SpaceVaryingBlur(method="product_convolution2d_patch",
-                                 patch_info=patch_info,
-                                 **params_pc)
+patch_physics = SpaceVaryingBlur(
+    method="product_convolution2d_patch", patch_info=patch_info, **params_pc
+)
 
 dirac_comb = torch.zeros(1, 1, img_size, img_size)
 delta = 2 * psf_size
 dirac_comb[0, 0, ::delta, ::delta] = 1
 
 psf_grid = patch_physics(dirac_comb)
-plot(psf_grid ** 0.1, titles="Space varying impulse responses")
+plot(psf_grid**0.1, titles="Space varying impulse responses")
 
 # %%
 num_patches = 4
 i = torch.randint(
-    patch_size, img_size - patch_size, (dirac_comb.size(0), num_patches, ))
+    patch_size,
+    img_size - patch_size,
+    (
+        dirac_comb.size(0),
+        num_patches,
+    ),
+)
 j = torch.randint(
-    patch_size, img_size - patch_size, (dirac_comb.size(0), num_patches, ))
+    patch_size,
+    img_size - patch_size,
+    (
+        dirac_comb.size(0),
+        num_patches,
+    ),
+)
 centers = torch.stack((i, j), dim=-1)
 psf = patch_physics.get_psf(centers=centers)
 plot(psf.flatten(0, 1) ** 0.5)
@@ -370,35 +396,45 @@ def generate_random_patch(tensor, centers, patch_size: tuple[int]):
 
     if centers.size(0) == 1:
         centers = centers.expand(tensor.size(0), -1, -1)
-    centers[..., 0].clamp_(
-        patch_size[0] // 2, tensor.size(-2) - patch_size[0] // 2)
-    centers[..., 1].clamp_(
-        patch_size[1] // 2, tensor.size(-1) - patch_size[1] // 2)
+    centers[..., 0].clamp_(patch_size[0] // 2, tensor.size(-2) - patch_size[0] // 2)
+    centers[..., 1].clamp_(patch_size[1] // 2, tensor.size(-1) - patch_size[1] // 2)
     random_patch = []
 
     for b in range(tensor.size(0)):
         for k in range(centers.size(1)):
             position = centers[b, k, :]
             ih, iw = patch_size[0] % 2, patch_size[1] % 2
-            random_patch.append(tensor[b:b+1,
-                                       :,
-                                       position[0] - patch_size[0] // 2: position[0] + patch_size[0] // 2 + ih,
-                                       position[1] - patch_size[1] // 2: position[1] + patch_size[1] // 2 + iw])
+            random_patch.append(
+                tensor[
+                    b : b + 1,
+                    :,
+                    position[0]
+                    - patch_size[0] // 2 : position[0]
+                    + patch_size[0] // 2
+                    + ih,
+                    position[1]
+                    - patch_size[1] // 2 : position[1]
+                    + patch_size[1] // 2
+                    + iw,
+                ]
+            )
     return torch.stack(random_patch, dim=0)
 
 
-centers = torch.stack((
-    torch.arange(0, img_size, delta),
-    torch.arange(0, img_size, delta)), dim=1
+centers = torch.stack(
+    (torch.arange(0, img_size, delta), torch.arange(0, img_size, delta)), dim=1
 )[None, 1:-1, :]
 psf_grid_padded = torch.nn.functional.pad(
-    psf_grid, (psf_size // 2, psf_size // 2, psf_size // 2, psf_size // 2), mode='constant', value=0)
+    psf_grid,
+    (psf_size // 2, psf_size // 2, psf_size // 2, psf_size // 2),
+    mode="constant",
+    value=0,
+)
 
 psf = patch_physics.get_psf(centers)
 plot(psf.flatten(0, 1) ** 0.5)
 
-psf_hat = generate_random_patch(
-    psf_grid_padded, centers, patch_size=psf_size)
+psf_hat = generate_random_patch(psf_grid_padded, centers, patch_size=psf_size)
 plot(psf_hat.flatten(0, 1) ** 0.5)
 plot((psf_hat - psf).flatten(0, 1) ** 0.5)
 

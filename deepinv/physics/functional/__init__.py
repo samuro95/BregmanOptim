@@ -26,5 +26,5 @@ from .product_convolution import (
     get_psf_pconv2d_eigen,
     get_psf_pconv2d_eigen_optimized,
     get_psf_pconv2d_patch,
-    get_psf_pconv2d_patch_optimized
+    get_psf_pconv2d_patch_optimized,
 )
