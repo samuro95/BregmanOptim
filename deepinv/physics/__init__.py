@@ -30,3 +30,4 @@ from .phase_retrieval import (
 )
 from .radio import RadioInterferometry
 from . import functional
+from . import generator
