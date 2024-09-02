@@ -196,6 +196,8 @@ class DiffractionBlurGenerator(PSFGenerator):
     :param tuple[int] pupil_size: this is used to synthesize the super-resolved pupil.
         The higher the more precise, defaults to ``(256, 256)``.
         If a single ``int`` is given, a square pupil is considered.
+    :param bool apodize: if True, the PSF is multiplied by a function that goes smoothly to 0 outside a disk of radius psf_size, 
+        to avoid introducing high frequency contents to the PSF. defaults to False.
 
     |sep|
 
@@ -229,6 +231,7 @@ class DiffractionBlurGenerator(PSFGenerator):
         fc: float = 0.2,
         max_zernike_amplitude: float = 0.15,
         pupil_size: Tuple[int] = (256, 256),
+        apodize: bool = False,
     ):
         kwargs = {
             "list_param": list_param,
@@ -245,12 +248,21 @@ class DiffractionBlurGenerator(PSFGenerator):
         )
 
         self.list_param = list_param  # list of parameters to provide
+        self.apodize = apodize
 
         pupil_size = (
             max(self.pupil_size[0], self.psf_size[0]),
             max(self.pupil_size[1], self.psf_size[1]),
         )
         self.pupil_size = pupil_size
+        
+        lin_0 = torch.linspace(-psf_size[0]//2, psf_size[0]//2, psf_size[0], **self.factory_kwargs)
+        lin_1 = torch.linspace(-psf_size[1]//2, psf_size[1]//2, psf_size[1], **self.factory_kwargs)
+        XX0, XX1 = torch.meshgrid(lin_0, lin_1, indexing="ij")
+        dist = (XX0**2 + XX1**2)**.5
+        radius = min(psf_size)/2
+        apodize_length = 10
+        self.apodize_mask = bump_function(dist, a=radius-apodize_length , b=apodize_length)
 
         lin_x = torch.linspace(-0.5, 0.5, self.pupil_size[0], **self.factory_kwargs)
         lin_y = torch.linspace(-0.5, 0.5, self.pupil_size[1], **self.factory_kwargs)
@@ -333,6 +345,9 @@ class DiffractionBlurGenerator(PSFGenerator):
         ].unsqueeze(1)
 
         psf = psf3 / torch.sum(psf3, dim=(-1, -2), keepdim=True)
+        if self.apodize:
+            psf = self.apodize_mask*psf
+            
         return {
             "filter": psf.expand(-1, self.shape[0], -1, -1),
             "coeff": coeff,
