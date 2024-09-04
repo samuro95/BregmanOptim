@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Tuple
 from math import ceil, floor
 from deepinv.physics.generator import PhysicsGenerator
-from deepinv.physics.functional import histogramdd, conv2d
+from deepinv.physics.functional import histogramdd, conv2d, rotate_image_via_shear
 from deepinv.physics.functional.interp import ThinPlateSpline
 from deepinv.physics.functional.product_convolution import (
     unity_partition_function_2d,
@@ -347,6 +347,10 @@ class DiffractionBlurGenerator(PSFGenerator):
         psf = psf3 / torch.sum(psf3, dim=(-1, -2), keepdim=True)
         if self.apodize:
             psf = self.apodize_mask*psf
+            
+        #random rotate filters
+        angles_deg = torch.rand(psf.size(0)) * 360
+        psf = rotate_image_via_shear(psf, angles_deg)
             
         return {
             "filter": psf.expand(-1, self.shape[0], -1, -1),

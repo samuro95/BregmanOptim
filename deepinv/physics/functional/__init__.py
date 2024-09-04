@@ -2,6 +2,7 @@ from .interp import ThinPlateSpline
 from .radon import Radon, IRadon, RampFilter
 from .downsampling import downsample
 from .hist import histogram, histogramdd
+from .rotation import rotate_image_via_shear
 from .multiplier import (
     multiplier,
     multiplier_adjoint,
