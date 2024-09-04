@@ -349,7 +349,7 @@ class DiffractionBlurGenerator(PSFGenerator):
             psf = self.apodize_mask*psf
             
         #random rotate filters
-        angles_deg = torch.rand(psf.size(0), device=self.device) * 360
+        angles_deg = torch.rand(psf.size(0), **self.factory_kwargs) * 360
         psf = rotate_image_via_shear(psf, angles_deg)
             
         return {
