@@ -25,7 +25,7 @@ def rotate_image_via_shear(image: torch.Tensor, angle_deg: torch.Tensor, center=
     def shearx(image, shear):
         fft1 = torch.fft.fft2(image, dim=(-1))
         freq_1 = torch.fft.fftfreq(N1, d=1.0, device=image.device)
-        freq_0 = shear[:, None] * (torch.arange(N0) - center[0])[None]
+        freq_0 = shear[:, None] * (torch.arange(N0, device=image.device) - center[0])[None]
         phase_shift = torch.exp(-2j * torch.pi * freq_0[..., None] * freq_1[None, None, :])
         image_shear = fft1 * phase_shift[:, None]
         return torch.abs(torch.fft.ifft2(image_shear, dim=(-1)))
@@ -33,7 +33,7 @@ def rotate_image_via_shear(image: torch.Tensor, angle_deg: torch.Tensor, center=
     def sheary(image, shear):
         fft0 = torch.fft.fft2(image, dim=(-2))
         freq_0 = torch.fft.fftfreq(N0, d=1.0, device=image.device)
-        freq_1 = shear[:, None] * (torch.arange(N1) - center[1])[None]
+        freq_1 = shear[:, None] * (torch.arange(N1, device=image.device) - center[1])[None]
         phase_shift = torch.exp(-2j * torch.pi * freq_0[None, :, None] * freq_1[:, None, :])
         image_shear = fft0 * phase_shift[:, None]
         return torch.abs(torch.fft.ifft2(image_shear, dim=(-2)))
