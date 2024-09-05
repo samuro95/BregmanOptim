@@ -43,8 +43,8 @@ class SigmaGenerator(PhysicsGenerator):
 
         """
         if self.log_uniform:
-            log_sigma_min = torch.log(torch.tensor([self.sigma_min]))
-            log_sigma_max = torch.log(torch.tensor([self.sigma_max]))
+            log_sigma_min = torch.log(torch.tensor([self.sigma_min], device=self.device))
+            log_sigma_max = torch.log(torch.tensor([self.sigma_max], device=self.device))
             
             log_sigma = (
                 torch.rand(batch_size, device=self.device)
