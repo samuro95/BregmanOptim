@@ -310,7 +310,7 @@ class DiffractionBlurGenerator(PSFGenerator):
     def __update__(self):
         r"""
         Update the device and dtype of Zernike polynomials and the coordinates
-        """        rotate: bool = False,
+        """
 
         self.rho = self.rho.to(**self.factory_kwargs)
         self.Z = self.Z.to(**self.factory_kwargs)
