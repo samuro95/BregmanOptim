@@ -4,7 +4,7 @@ from typing import List, Tuple
 from math import ceil, floor
 from deepinv.physics.generator import PhysicsGenerator
 from deepinv.physics.functional import histogramdd, conv2d
-from deepinv.transforms import rotate_image_via_shear
+from deepinv.transform import rotate_image_via_shear
 from deepinv.physics.functional.interp import ThinPlateSpline
 from deepinv.physics.functional.product_convolution import (
     unity_partition_function_2d,
