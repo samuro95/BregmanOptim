@@ -3,7 +3,8 @@ import numpy as np
 from typing import List, Tuple
 from math import ceil, floor
 from deepinv.physics.generator import PhysicsGenerator
-from deepinv.physics.functional import histogramdd, conv2d, rotate_image_via_shear
+from deepinv.physics.functional import histogramdd, conv2d
+from deepinv.transforms import rotate_image_via_shear
 from deepinv.physics.functional.interp import ThinPlateSpline
 from deepinv.physics.functional.product_convolution import (
     unity_partition_function_2d,
@@ -309,11 +310,12 @@ class DiffractionBlurGenerator(PSFGenerator):
     def __update__(self):
         r"""
         Update the device and dtype of Zernike polynomials and the coordinates
-        """
+        """        rotate: bool = False,
+
         self.rho = self.rho.to(**self.factory_kwargs)
         self.Z = self.Z.to(**self.factory_kwargs)
 
-    def step(self, batch_size: int = 1, coeff: torch.Tensor = None):
+    def step(self, batch_size: int = 1, coeff: torch.Tensor = None, angles_deg: torch.Tensor = None):
         r"""
         Generate a batch of PFS with a batch of Zernike coefficients
 
@@ -349,8 +351,8 @@ class DiffractionBlurGenerator(PSFGenerator):
             psf = self.apodize_mask*psf
             
         #random rotate filters
-        angles_deg = torch.rand(psf.size(0), **self.factory_kwargs) * 360
-        psf = rotate_image_via_shear(psf, angles_deg)
+        if angles_deg is not None:
+            psf = rotate_image_via_shear(psf, angles_deg)
             
         return {
             "filter": psf.expand(-1, self.shape[0], -1, -1),
