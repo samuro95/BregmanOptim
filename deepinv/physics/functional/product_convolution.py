@@ -311,7 +311,7 @@ def get_psf_pconv2d_patch(
                     patch_position_w[count_j] : patch_position_w[count_j] + 1,
                 ]
             )
-    return psf.flip((-1, -2))
+    return psf
 
 
 def get_psf_pconv2d_patch_optimized(
@@ -352,13 +352,16 @@ def get_psf_pconv2d_patch_optimized(
             index_w.append(iw)
             patch_position_h.append(ph)
             patch_position_w.append(pw)
-    index_h = pad_sublist(index_h)
-    index_w = pad_sublist(index_w)
-    patch_position_h = pad_sublist(patch_position_h)
-    patch_position_w = pad_sublist(patch_position_w)
+    index_h, weight_h = pad_sublist(index_h)
+    index_w, weight_w = pad_sublist(index_w)
+    patch_position_h, _ = pad_sublist(patch_position_h)
+    patch_position_w, _ = pad_sublist(patch_position_w)
 
     index_h = torch.tensor(index_h, device=h.device, dtype=torch.long).view(B, N, -1)
     index_w = torch.tensor(index_w, device=h.device, dtype=torch.long).view(B, N, -1)
+    weight_h = torch.tensor(weight_h, device=h.device, dtype=torch.long).view(B, N, -1)
+    weight_w = torch.tensor(weight_w, device=h.device, dtype=torch.long).view(B, N, -1)
+
     patch_position_h = torch.tensor(
         patch_position_h, device=h.device, dtype=torch.long
     ).view(B, N, -1)
@@ -397,9 +400,9 @@ def get_psf_pconv2d_patch_optimized(
         patch_position_w[..., :, None],
     ]
 
-    # print(h_selected.shape, w_selected.shape)
-    psf = torch.sum(h_selected * w_selected[..., None, None], dim=(2, 3))
-    return psf.flip((-1, -2)).transpose(1, 2)
+    weight = weight_h[...,None,:] * weight_w[..., None]
+    psf = torch.sum(h_selected * w_selected[..., None, None] * weight[..., None, None, None], dim=(2, 3))
+    return psf.transpose(1, 2)
 
 
 # UTILITY FUNCTIONS
@@ -789,14 +792,17 @@ def pad_sublist(input: List):
     :Example:
 
     >>> input = [[1, 2, 3], [4, 5], [6]]
-    >>> pad_sublists(input, padding_value=0)
+    >>> pad_sublist(input, value=0)
     [[1, 2, 3], [4, 5, 0], [6, 0, 0]]
     """
     max_length = max(len(sublist) for sublist in input)
-    padded_lst = [
+    padded_weight = [[1] * len(sublist) + [0] * (max_length - len(sublist)) for sublist in input
+    ]
+    padded_list = [
         sublist + [sublist[-1]] * (max_length - len(sublist)) for sublist in input
     ]
-    return padded_lst
+    
+    return padded_list, padded_weight
 
 
 def compute_patch_info(
