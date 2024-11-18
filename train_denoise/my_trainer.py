@@ -52,6 +52,7 @@ class MyTrainer(dinv.training.Trainer):
                     logs[f"{l.__class__.__name__} no learning"] = (
                         self.logs_metrics_linear[k].avg
                     )
+
         return logs
 
 

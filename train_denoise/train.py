@@ -7,7 +7,7 @@ import deepinv as dinv
 from argparse import ArgumentParser
 import json
 from pathlib import Path
-from models.unrolled_dual_MD import get_unrolled_architecture, MirrorLoss, NoLipLoss, FunctionalMetric
+from models.unrolled_dual_MD import get_unrolled_architecture, MirrorLoss, NoLipLoss, FunctionalMetric, LambdaMetric, StepsizeMetric, SigmaMetric
 from utils.distributed_setup import setup_distributed
 from utils.dataloaders import get_drunet_dataset
 from utils.utils import get_wandb_setup
@@ -157,6 +157,8 @@ def load_denoising_data(
 
 
 def train_model(
+    ckpt_pretrained=None,
+    test_only=False,
     n_layers=10,
     grayscale=False,
     gpu_num=1,
@@ -166,7 +168,6 @@ def train_model(
     stepsize_init=1.0,
     lamb_init=1.0,
     sigma_denoiser_init = 0.03,
-    ckpt_resume=None,
     wandb_resume_id=None,
     seed=0,
     wandb_vis=True,
@@ -246,6 +247,9 @@ def train_model(
 
     metrics = [dinv.loss.metric.PSNR()]
     metrics.append(FunctionalMetric())
+    metrics.append(LambdaMetric())
+    metrics.append(StepsizeMetric())
+    metrics.append(SigmaMetric())
 
 
     if dist.is_initialized() and distribute:
@@ -303,27 +307,29 @@ def train_model(
         ckp_interval=20,
         online_measurements=True,
         check_grad=True,
-        ckpt_pretrained=ckpt_resume,
+        ckpt_pretrained=ckpt_pretrained,
         freq_plot=1,
         show_progress_bar=show_progress_bar,
         display_losses_eval=True,
         metrics=metrics
     )
-
+    
     trainer.test(val_dataloader)
 
-    trainer.train()
+    if not test_only:
+        trainer.train()
 
 
 if __name__ == "__main__":
 
     parser = ArgumentParser()
+    parser.add_argument("--test_only", type=int, default=0)
     parser.add_argument("--grayscale", type=int, default=0)
+    parser.add_argument("--ckpt_pretrained", type=str)
     parser.add_argument("--data_fidelity", type=str, default="L2")
     parser.add_argument("--noise_model", type=str, default="Gaussian")
     parser.add_argument("--degradation", type=str)
     parser.add_argument("--gpu_num", type=int, default=1)
-    parser.add_argument("--ckpt_resume", type=str, default="")
     parser.add_argument("--model_name", type=str, default="dual_DDMD")
     parser.add_argument("--use_mirror_loss", type=int, default=0)
     parser.add_argument("--denoiser_name", type=str, default="DRUNET")
@@ -353,10 +359,10 @@ if __name__ == "__main__":
     parser.add_argument("--tol_power_it", type=float, default = 1e-3)
     args = parser.parse_args()
 
+    test_only = False if args.test_only == 0 else True
     grayscale = False if args.grayscale == 0 else True
     distribute = False if args.distribute == 0 else True
     use_mirror_loss = False if args.use_mirror_loss == 0 else True
-    ckpt_resume = None if args.ckpt_resume == "" else args.ckpt_resume
     wanddb_resume_id = None if args.wandb_resume_id == "" else args.wandb_resume_id
     lr_scheduler = None if args.lr_scheduler == "" else args.lr_scheduler
     epochs = None if args.epochs == 0 else args.epochs
@@ -371,6 +377,8 @@ if __name__ == "__main__":
             raise ValueError('noise model not available')
 
     train_model(
+        test_only = test_only,
+        ckpt_pretrained = args.ckpt_pretrained,
         data_fidelity=args.data_fidelity,
         noise_model=args.noise_model,
         model_name=args.model_name,

@@ -202,9 +202,12 @@ class PoissonLikelihoodDistance(Distance):
         # return (-y * torch.log(x / self.gain + self.bkg)).flatten().sum() + (
         #     (x / self.gain) + self.bkg - y
         # ).reshape(x.shape[0], -1).sum(dim=1)
-        return (y * torch.log( y / (x / self.gain) + self.bkg)).flatten().sum() + (
+        d = (y * torch.log( y / (x / self.gain) + self.bkg)).flatten().sum() + (
             (x / self.gain) + self.bkg - y
         ).reshape(x.shape[0], -1).sum(dim=1)
+        print(x.min())
+        print(d)
+        return d
 
     def grad(self, x, y, *args, **kwargs):
         r"""

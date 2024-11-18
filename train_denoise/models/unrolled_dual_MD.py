@@ -140,6 +140,30 @@ class FunctionalMetric(Metric):
             return data_fidelity.fn(x_net, y, physics)
 
 
+class LambdaMetric(Metric):
+    def __init__(self):
+        super(LambdaMetric, self).__init__()
+        self.name = "lambda"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['lambda'][0])
+
+class StepsizeMetric(Metric):
+    def __init__(self):
+        super(StepsizeMetric, self).__init__()
+        self.name = "stepsize"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['stepsize'][0])
+
+class SigmaMetric(Metric):
+    def __init__(self):
+        super(SigmaMetric, self).__init__()
+        self.name = "sigma"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['g_param'][0])
+
 class NoLipLoss(Loss):
     def __init__(self, L = 1., eps_jacobian_loss = 0.05, jacobian_loss_weight = 1e-2, max_iter_power_it=10, tol_power_it=1e-3, verbose=False, eval_mode=False, use_interpolation=False):
         super(NoLipLoss, self).__init__()
