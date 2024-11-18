@@ -184,7 +184,7 @@ class PoissonLikelihoodDistance(Distance):
     :param bool denormalize: if True, the measurement is divided by the gain. By default, in the class :class:`physics.noise.PoissonNoise`, the measurements are multiplied by the gain after being sampled by the Poisson distribution. Default: True.
     """
 
-    def __init__(self, gain=1.0, bkg=0., denormalize=False):
+    def __init__(self, gain=1.0, bkg=0., denormalize=False, clip_forward = False):
         super().__init__()
         self.bkg = bkg
         self.gain = gain
@@ -199,14 +199,14 @@ class PoissonLikelihoodDistance(Distance):
         """
         if self.denormalize:
             y = y / self.gain
+        if clip_forward:
+            x = torch.clip(x, min=1e-8)
         # return (-y * torch.log(x / self.gain + self.bkg)).flatten().sum() + (
         #     (x / self.gain) + self.bkg - y
         # ).reshape(x.shape[0], -1).sum(dim=1)
         d = (y * torch.log( y / (x / self.gain) + self.bkg)).flatten().sum() + (
             (x / self.gain) + self.bkg - y
         ).reshape(x.shape[0], -1).sum(dim=1)
-        print(x.min())
-        print(d)
         return d
 
     def grad(self, x, y, *args, **kwargs):
