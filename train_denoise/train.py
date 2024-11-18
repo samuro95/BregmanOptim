@@ -326,14 +326,15 @@ if __name__ == "__main__":
     parser.add_argument("--test_only", type=int, default=0)
     parser.add_argument("--grayscale", type=int, default=0)
     parser.add_argument("--ckpt_pretrained", type=str)
-    parser.add_argument("--data_fidelity", type=str, default="L2")
-    parser.add_argument("--noise_model", type=str, default="Gaussian")
+    parser.add_argument("--data_fidelity", type=str, default="KL")
+    parser.add_argument("--noise_model", type=str, default="Poisson")
     parser.add_argument("--degradation", type=str)
     parser.add_argument("--gpu_num", type=int, default=1)
     parser.add_argument("--model_name", type=str, default="dual_DDMD")
-    parser.add_argument("--use_mirror_loss", type=int, default=0)
-    parser.add_argument("--denoiser_name", type=str, default="DRUNET")
-    parser.add_argument("--prior_name", type=str, default="wavelet")
+    parser.add_argument("--use_mirror_loss", type=int, default=1)
+    parser.add_argument("--denoiser_name", type=str, default="dncnn")
+    parser.add_argument("--prior_name", type=str, default="RED")
+    parser.add_argument("--n_layers", type=int, default = 10)
     parser.add_argument("--wandb_resume_id", type=str, default="")
     parser.add_argument("--lr_scheduler", type=str, default="multistep")
     parser.add_argument("--seed", type=int, default=0)
@@ -344,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--stepsize_init", type=float, default=0.01)
     parser.add_argument("--lamb_init", type=float, default=1.0)
-    parser.add_argument("--sigma_denoiser_init", type=float, default=0.03)
+    parser.add_argument("--sigma_denoiser_init", type=float, default=0.008)
     parser.add_argument("--distribute", type=int, default=0)
     parser.add_argument("--max_num_images", type=int, default=1e6)
     parser.add_argument("--noise_level_min", type=float, default=0.)
@@ -377,6 +378,7 @@ if __name__ == "__main__":
             raise ValueError('noise model not available')
 
     train_model(
+        n_layers = args.n_layers,
         test_only = test_only,
         ckpt_pretrained = args.ckpt_pretrained,
         data_fidelity=args.data_fidelity,
