@@ -248,12 +248,16 @@ class PoissonNoise(NoiseModel):
         """
         self.update_parameters(gain=gain)
         self.rng_manual_seed(seed)
+        if isinstance(gain, torch.Tensor):
+            gain = gain[(...,) + (None,) * (x.dim() - 1)]
+        else:
+            gain = gain.sigma
         y = torch.poisson(
-            torch.clip(x / self.gain, min=0.0) if self.clip_positive else x / self.gain,
+            torch.clip(x / gain, min=0.0) if self.clip_positive else x / gain,
             generator=self.rng,
         )
         if self.normalize:
-            y *= self.gain
+            y *= gain
         return y
 
     def update_parameters(self, gain=None, **kwargs):

@@ -1,5 +1,6 @@
 from .base import PhysicsGenerator, GeneratorMixture
 from .blur import (
+    GaussianBlurGenerator,
     MotionBlurGenerator,
     DiffractionBlurGenerator,
     PSFGenerator,
@@ -14,7 +15,7 @@ from .mri import (
     RandomMaskGenerator,
     EquispacedMaskGenerator,
 )
-from .noise import SigmaGenerator
+from .noise import SigmaGenerator, GainGenerator
 from .inpainting import (
     BernoulliSplittingMaskGenerator,
     GaussianSplittingMaskGenerator,

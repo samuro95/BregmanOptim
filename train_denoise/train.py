@@ -3,19 +3,16 @@ import torch.utils
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
-import torchvision
 import deepinv as dinv
-from deepinv.utils import plot  # , rescale_img
 from argparse import ArgumentParser
-import wandb
 import json
 from pathlib import Path
 from models.unrolled_dual_MD import get_unrolled_architecture, MirrorLoss, NoLipLoss, FunctionalMetric
 from utils.distributed_setup import setup_distributed
 from utils.dataloaders import get_drunet_dataset
-from utils.utils import rescale_img, get_wandb_setup
-from deepinv.physics.generator import SigmaGenerator, MotionBlurGenerator
-import numpy as np 
+from utils.utils import get_wandb_setup
+from deepinv.physics.generator import GainGenerator, SigmaGenerator, MotionBlurGenerator, GaussianBlurGenerator, BernoulliSplittingMaskGenerator
+from my_trainer import MyTrainer
 
 torch.backends.cudnn.benchmark = True
 
@@ -30,156 +27,6 @@ OUT_DIR = Path(".")
 CKPT_DIR = OUT_DIR / "ckpts"  # path to store the checkpoints
 WANDB_PROJ_NAME = "learned_MD_denoising"  # Name of the wandb project
 
-
-class MyTrainer(dinv.training.Trainer):
-    def __init__(self, *args, **kwargs):
-        super(MyTrainer, self).__init__(*args, **kwargs)
-
-    def to_image(self, x):
-        r"""
-        Convert the tensor to an image. Necessary for complex images (2 channels)
-
-        :param torch.Tensor x: input tensor
-        :return: image
-        """
-        if x.shape[1] == 2:
-            out = torch.moveaxis(x, 1, -1).contiguous()
-            out = torch.view_as_complex(out).abs().unsqueeze(1)
-        else:
-            out = x
-        return out
-
-    def compute_metrics(
-        self, x, x_net, y, physics, logs, train=True, epoch: int = None
-    ):
-        # Compute the metrics over the batch
-        with torch.no_grad():
-            for k, l in enumerate(self.metrics):
-                metric = l(
-                    x_net=x_net,
-                    x=x,
-                    y=y,
-                    physics=physics,
-                    model=self.model,
-                    epoch=epoch,
-                )
-
-                current_log = (
-                    self.logs_metrics_train[k] if train else self.logs_metrics_eval[k]
-                )
-                current_log.update(metric.detach().cpu().numpy())
-                logs[l.__class__.__name__] = current_log.avg
-
-                if not train and self.compare_no_learning:
-                    x_lin = self.no_learning_inference(y, physics)
-                    metric = l(x=x, x_net=x_lin, y=y, physics=physics, model=self.model)
-                    self.logs_metrics_linear[k].update(metric.detach().cpu().numpy())
-                    logs[f"{l.__class__.__name__} no learning"] = (
-                        self.logs_metrics_linear[k].avg
-                    )
-        return logs
-
-
-    def prepare_images(self, physics_cur, x, y, x_net):
-        r"""
-        Prepare the images for plotting.
-
-        It prepares the images for plotting by rescaling them and concatenating them in a grid.
-
-        :param deepinv.physics.Physics physics_cur: Current physics operator.
-        :param torch.Tensor x: Ground truth.
-        :param torch.Tensor y: Measurement.
-        :param torch.Tensor x_net: Reconstruction network output.
-        :returns: The images, the titles, the grid image, and the caption.
-        """
-        with torch.no_grad():
-            if len(y.shape) == len(x.shape) and y.shape != x.shape:
-                y_reshaped = torch.nn.functional.interpolate(y, size=x.shape[2])
-                if hasattr(physics_cur, "A_adjoint"):
-                    imgs = [y_reshaped, physics_cur.A_adjoint(y), x_net, x]
-                    caption = (
-                        "From top to bottom: input, backprojection, output, target"
-                    )
-                    titles = ["Input", "Backprojection", "Output", "Target"]
-                else:
-                    imgs = [y_reshaped, x_net, x]
-                    titles = ["Input", "Output", "Target"]
-                    caption = "From top to bottom: input, output, target"
-            else:
-                if hasattr(physics_cur, "A_adjoint"):
-                    if isinstance(physics_cur, torch.nn.DataParallel):
-                        back = physics_cur.module.A_adjoint(y)
-                    else:
-                        back = physics_cur.A_adjoint(y)
-                    imgs = [back, x_net, x]
-                    titles = ["Backprojection", "Output", "Target"]
-                    caption = "From top to bottom: backprojection, output, target"
-                elif y.shape == x.shape:
-                    imgs = [y, x_net, x]
-                    titles = ["Measurement", "Output", "Target"]
-                    caption = "From top to bottom: measurement, output, target"
-                else:
-                    imgs = [x_net, x]
-                    caption = "From top to bottom: output, target"
-                    titles = ["Output", "Target"]
-
-            # Concatenate the images along the batch dimension
-            for i in range(len(imgs)):
-                imgs[i] = self.to_image(imgs[i])
-
-            vis_array = torch.cat(imgs, dim=0)
-            for i in range(len(vis_array)):
-                vis_array[i] = rescale_img(vis_array[i], rescale_mode="min_max")
-            grid_image = torchvision.utils.make_grid(vis_array, nrow=y.shape[0])
-
-        return imgs, titles, grid_image, caption
-
-    def plot(self, epoch, physics, x, y, x_net, train=True):
-        r"""
-        Plot the images.
-
-        It plots the images at the end of each epoch.
-
-        :param int epoch: Current epoch.
-        :param deepinv.physics.Physics physics: Current physics operator.
-        :param torch.Tensor x: Ground truth.
-        :param torch.Tensor y: Measurement.
-        :param torch.Tensor x_net: Network reconstruction.
-        :param bool train: If ``True``, the model is trained, otherwise it is evaluated.
-        """
-        post_str = "Training" if train else "Eval"
-        if self.plot_images and ((epoch + 1) % self.freq_plot == 0):
-            imgs, titles, grid_image, caption = self.prepare_images(
-                physics, x, y, x_net
-            )
-
-            # normalize the grid image
-            # grid_image = rescale_img(grid_image, rescale_mode="min_max")
-
-            # if MRI in class name, rescale = min-max
-            if "MRI" in str(physics):
-                rescale_mode = "min_max"
-            else:
-                rescale_mode = "clip"
-            plot(
-                imgs,
-                titles=titles,
-                show=self.plot_images,
-                return_fig=True,
-                rescale_mode=rescale_mode,
-            )
-
-            if self.wandb_vis:
-                log_dict_post_epoch = {}
-                images = wandb.Image(
-                    grid_image,
-                    caption=caption,
-                )
-                log_dict_post_epoch[post_str + " samples"] = images
-                log_dict_post_epoch["step"] = epoch
-                wandb.log(log_dict_post_epoch)
-
-
 def load_denoising_data(
     patch_size,
     train_batch_size,
@@ -192,10 +39,10 @@ def load_denoising_data(
     noise_model = 'Gaussian',
     noise_level_min=0.,
     noise_level_max=0.2,
-    gaussian_blur = False,
+    degradation = None,
     psf_size = 31,
-    motion_blur = False,
-
+    downsampling_factor = 2,
+    split_ratio = 0.5,
 ):
     """
     Load the training and validation datasets and create the corresponding dataloaders.
@@ -270,27 +117,41 @@ def load_denoising_data(
             drop_last=False,
         )
 
-    if noise_model == 'Gaussian':
+    img_size = (3, patch_size, patch_size)
+
+    if noise_model.lower() == 'gaussian':
         noise = dinv.physics.GaussianNoise()
-    elif noise_model == 'Poisson':
-        noise = dinv.physics.PoissonNoise(clip_positive = True, normalize=False)
+        noise_generator = SigmaGenerator(sigma_min=noise_level_min, sigma_max=noise_level_max, device=device)
+    elif noise_model.lower() == 'poisson':
+        noise = dinv.physics.PoissonNoise(clip_positive = True, normalize=True)
+        noise_generator = GainGenerator(gain_min=noise_level_min, gain_max=noise_level_max, device=device)
+    else:
+        raise ValueError('noise model not available')
 
-    physics_noise = dinv.physics.DecomposablePhysics(
-        device=device, noise_model=noise
-    )
-    noise_generator = SigmaGenerator(sigma_min=noise_level_min, sigma_max=noise_level_max, device=device)
-
-    if gaussian_blur :
-        gaussian_blur_generator = GaussianBlurGenerator(psf_size=(psf_size, psf_size), num_channels=1, device=device) 
-        + SigmaGenerator(sigma_min=noise_level_min, sigma_max=noise_level_max, device=device)
-    if motion_blur :
-        motion_generator = MotionBlurGenerator((psf_size, psf_size), l=0.6, sigma=1, device=device)
-        + SigmaGenerator(sigma_min=noise_level_min, sigma_max=noise_level_max, device=device)
+    if degradation.lower() == 'gaussian_blur' :
+        blur_generator = GaussianBlurGenerator(psf_size=(psf_size, psf_size), sigma_min = 0.01, sigma_max= 4., num_channels=1, device=device) 
+        generator = blur_generator + noise_generator
+        physics = dinv.physics.BlurFFT(img_size = img_size, device=device, noise_model=noise)
+    elif degradation.lower() == 'motion_blur' :
+        blur_generator = MotionBlurGenerator((psf_size, psf_size), l=0.3, sigma=0.25, device=device)
+        generator = blur_generator + noise_generator
+        physics = dinv.physics.BlurFFT(img_size = img_size, device=device, noise_model=noise)
+    elif degradation.lower() == 'inpainting' :
+        mask_generator = BernoulliSplittingMaskGenerator(tensor_size = img_size, split_ratio = split_ratio, device = device)
+        generator = mask_generator + noise_generator
+        physics = dinv.physics.Inpainting(tensor_size = img_size, device=device, noise_model=noise)
+    elif degradation.lower() == 'sr' :
+        blur_generator = GaussianBlurGenerator(psf_size=(psf_size, psf_size), num_channels=1, device=device) 
+        generator = blur_generator + noise_generator
+        physics = dinv.physics.Downsampling(factor = downsampling_factor, img_size = img_size, device=device, noise_model=noise)
+    else :
+        generator = noise_generator
+        physics = dinv.physics.DecomposablePhysics(device=device, noise_model=noise)
 
     val_dataloader = [val_dataloader]
     train_dataloaders = [train_dataloader]
-    physics = [physics_noise]
-    generators = [noise_generator]
+    physics = [physics]
+    generators = [generator]
 
     return train_dataloaders, val_dataloader, physics, generators
 
@@ -330,6 +191,7 @@ def train_model(
     jacobian_loss_weight = 1e-2, 
     max_iter_power_it=10, 
     tol_power_it=1e-3,
+    degradation=None,
     args=None
 ):
 
@@ -351,7 +213,8 @@ def train_model(
         max_num_images=max_num_images,
         noise_model=noise_model,
         noise_level_min=noise_level_min,
-        noise_level_max=noise_level_max 
+        noise_level_max=noise_level_max,
+        degradation=degradation
     )
 
     if not "dual" in model_name:
@@ -458,6 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--grayscale", type=int, default=0)
     parser.add_argument("--data_fidelity", type=str, default="L2")
     parser.add_argument("--noise_model", type=str, default="Gaussian")
+    parser.add_argument("--degradation", type=str)
     parser.add_argument("--gpu_num", type=int, default=1)
     parser.add_argument("--ckpt_resume", type=str, default="")
     parser.add_argument("--model_name", type=str, default="dual_DDMD")
@@ -499,10 +363,12 @@ if __name__ == "__main__":
     use_NoLip_loss = False if args.use_NoLip_loss == 0 else True
 
     if args.noise_level_max is None:
-        if args.noise_model == 'Gaussian':
+        if args.noise_model.lower() == 'gaussian':
             args.noise_level_max = 0.2
-        elif args.noise_model == 'Poisson':
+        elif args.noise_model.lower() == 'poisson':
             args.noise_level_max = 0.05
+        else:
+            raise ValueError('noise model not available')
 
     train_model(
         data_fidelity=args.data_fidelity,
@@ -533,5 +399,6 @@ if __name__ == "__main__":
         jacobian_loss_weight = args.jacobian_loss_weight, 
         max_iter_power_it = args.max_iter_power_it, 
         tol_power_it=args.tol_power_it,
+        degradation=args.degradation,
         args = args
     )

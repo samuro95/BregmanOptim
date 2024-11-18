@@ -154,7 +154,6 @@ class Physics(torch.nn.Module):  # parent class for forward models
         :return torch.Tensor: noisy measurements
 
         """
-
         return self.noise_model(x, **kwargs)
 
     def A_dagger(self, y, x_init=None):

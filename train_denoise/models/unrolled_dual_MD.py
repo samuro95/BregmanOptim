@@ -134,7 +134,10 @@ class FunctionalMetric(Metric):
         params = model.params_algo
         data_fidelity = model.data_fidelity[it] if isinstance(model.data_fidelity, Iterable) else model.data_fidelity
         prior = model.prior[it] if isinstance(model.prior, Iterable) else model.prior
-        return data_fidelity.fn(x_net, y, physics) + params["lambda"][it] * prior(x_net, params["g_param"][it])
+        if prior.explicit_prior :
+            return data_fidelity.fn(x_net, y, physics) + params["lambda"][it] * prior(x_net, params["g_param"][it])
+        else :
+            return data_fidelity.fn(x_net, y, physics)
 
 
 class NoLipLoss(Loss):
@@ -152,7 +155,7 @@ class NoLipLoss(Loss):
     def forward(self, x, x_net, y, physics, model, *args, **kwargs):
 
         if self.use_interpolation:
-            eta = torch.rand(y_in.size(0), 1, 1, 1, requires_grad=True).to(y_in.device)
+            eta = torch.rand(x.size(0), 1, 1, 1, requires_grad=True).to(x.device)
             x = eta * x.detach() + (1 - eta) * x_net.detach()
         else:
             x = x
@@ -181,7 +184,7 @@ def get_unrolled_architecture(max_iter = 10, data_fidelity="L2", prior_name="wav
     if data_fidelity.lower() == 'l2':
         data_fidelity = dinv.optim.data_fidelity.L2()
     elif data_fidelity.lower() == 'kl':
-        data_fidelity = dinv.optim.data_fidelity.PoissonLikelihood()
+        data_fidelity = dinv.optim.data_fidelity.PoissonLikelihood(denormalize=False, bkg=1e-15)
         
     # Set up the prior
     if prior_name.lower() == 'wavelet':
