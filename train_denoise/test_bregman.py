@@ -379,16 +379,19 @@ if __name__ == '__main__':
         x_model, metrics = model(
             y, physics, x_gt=x, compute_metrics=True
         )  # reconstruction with PnP algorithm
+        
+    print(x_model.min())
+    print(model.data_fidelity[0](x_model, y, physics))
 
     # compute PSNR
     print(f"Linear reconstruction PSNR: {dinv.metric.PSNR()(x, x_lin).item():.2f} dB")
     print(f"PnP reconstruction PSNR: {dinv.metric.PSNR()(x, x_model).item():.2f} dB")
 
-    # plot images. Images are saved in RESULTS_DIR.
-    imgs = [y, x, x_lin, x_model]
-    plot(
-        imgs,
-        titles=["Input", "GT", "Linear", "Recons."],
-        show=True,
-    )
-    plot_curves(metrics, show=True)
+    # # plot images. Images are saved in RESULTS_DIR.
+    # imgs = [y, x, x_lin, x_model]
+    # plot(
+    #     imgs,
+    #     titles=["Input", "GT", "Linear", "Recons."],
+    #     show=True,
+    # )
+    # plot_curves(metrics, show=True)
