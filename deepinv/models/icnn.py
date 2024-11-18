@@ -37,6 +37,7 @@ class ICNN(nn.Module):
         self.n_filters = num_filters
         self.kernel_size = kernel_dim
         self.padding = (self.kernel_size - 1) // 2
+        self.device = device
 
         # these layers should have non-negative weights
         self.wz = nn.ModuleList(
@@ -94,6 +95,7 @@ class ICNN(nn.Module):
             padding_mode="circular",
             bias=False,
         )
+        self.initialize_weights()
 
         # slope of leaky-relu
         self.negative_slope = 0.2
@@ -137,10 +139,10 @@ class ICNN(nn.Module):
 
     # a weight initialization routine for the ICNN, with positive weights
     def initialize_weights(self, min_val=0.0, max_val=0.001):
-        for layer in range(self.n_layers):
-            self.wz[layer].weight.data = min_val + (max_val - min_val) * torch.rand(
-                self.n_filters, self.n_filters, self.kernel_size, self.kernel_size
-            ).to(self.device)
+        # for layer in range(self.n_layers):
+        #     self.wz[layer].weight.data = min_val + (max_val - min_val) * torch.rand(
+        #         self.n_filters, self.n_filters, self.kernel_size, self.kernel_size
+        #     ).to(self.device)
         self.final_conv2d.weight.data = min_val + (max_val - min_val) * torch.rand(
             1, self.n_filters, self.kernel_size, self.kernel_size
         ).to(self.device)
