@@ -1,132 +1,394 @@
-r"""
-Plug-and-Play algorithm with Mirror Descent for Poisson noise inverse problems.
-====================================================================================================
-
-This is a simple example to show how to use a mirror descent algorithm for solving an inverse problem with Poisson noise.
-
-The Mirror descent with RED denoiser writes
-
-.. math:: 
-
-    x_{k+1} = \nabla \phi ( \nabla \phi^*(x_k) - \tau \nabla \distance{A(x_k)}{y} - \tau ( x_k - D_\sigma(x)))
-
-where :math:`\phi` is a convex Bergman potential, :math:`\distance{A(x)}{y}` is the data fidelity term and :math:`D_\sigma(x)` is a denoiser.
-
-In this example, we use the DnCNN denoiser. As the observation has been corrupted with Poisson noise, we use the :class:`deepinv.optim.PoissonLikelihood` data-fidelity term.
-In https://publications.ut-capitole.fr/id/eprint/25852/1/25852.pdf, it is shown that, with this data-fidelity term, the right Bregman potential to use is Burg's entropy :class:`deepinv.optim.bregman.BurgEntropy`.
-"""
-
 import deepinv as dinv
-from pathlib import Path
 import torch
-from torch.utils.data import DataLoader
-from deepinv.optim.data_fidelity import PoissonLikelihood
 from deepinv.optim.prior import RED
-from deepinv.optim import optim_builder
-from deepinv.optim.bregman import BurgEntropy
-from deepinv.utils.demo import load_url_image, get_image_url
-from deepinv.utils.plotting import plot, plot_curves
+from deepinv.unfolded import unfolded_builder
+from deepinv.optim import Bregman
+from deepinv.models.icnn import ICNN
+from deepinv.optim.optim_iterators import MDIteration, OptimIterator
+from deepinv.loss.loss import Loss
+from deepinv.loss.metric import Metric
+from deepinv.optim.utils import gradient_descent
+from collections.abc import Iterable
 
-# %%
-# Setup paths for data loading and results.
-# ----------------------------------------------------------------------------------------
-#
+class fStepGD(dinv.optim.optim_iterators.fStep):
+    r"""
+    GD fStep module.
+    """
 
-BASE_DIR = Path(".")
-ORIGINAL_DATA_DIR = BASE_DIR / "datasets"
-DATA_DIR = BASE_DIR / "measurements"
-RESULTS_DIR = BASE_DIR / "results"
-CKPT_DIR = BASE_DIR / "ckpts"
+    def __init__(self, **kwargs):
+        super(fStepGD, self).__init__(**kwargs)
 
-# Set the global random seed from pytorch to ensure reproducibility of the example.
-torch.manual_seed(0)
+    def forward(self, x, cur_data_fidelity, cur_params, y, physics):
+        r"""
+        Single gradient descent iteration on the data fit term :math:`f`.
 
-img_size = 64
-device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else "cpu"
-url = get_image_url("butterfly.png")
-x_true = load_url_image(url=url, img_size=img_size).to(device)
-x = x_true.clone()
-
-
-n_channels = 3  # 3 for color images, 1 for gray-scale images
-operation = "deblurring"
-
-# Degradation parameters
-noise_level_img = 1 / 20  # Poisson Noise gain
-
-# Generate the gaussian blur operator with Poisson noise.
-physics = dinv.physics.BlurFFT(
-    img_size=(n_channels, img_size, img_size),
-    filter=dinv.physics.blur.gaussian_blur(),
-    device=device,
-    noise_model=dinv.physics.PoissonNoise(gain=noise_level_img),
-)
-
-# %%
-# Define the PnP algorithm.
-# ----------------------------------------------------------------------------------------
-# The chosen algorithm is here MD (Mirror Descent).
+        :param torch.Tensor x: current iterate :math:`x_k`.
+        :param deepinv.optim.DataFidelity cur_data_fidelity: Instance of the DataFidelity class defining the current data_fidelity.
+        :param dict cur_params: Dictionary containing the current parameters of the algorithm.
+        :param torch.Tensor y: Input data.
+        :param deepinv.physics physics: Instance of the physics modeling the data-fidelity term.
+        """
+        return cur_data_fidelity.grad(x, y, physics)
 
 
-# Select the data fidelity term, here Poisson likelihood due to the use of Poisson noise in the forward operator.
-data_fidelity = PoissonLikelihood(gain=noise_level_img)
+class gStepGD(dinv.optim.optim_iterators.gStep):
+    r"""
+    GD gStep module.
+    """
 
-# Set up the denoising prior. Note that we use a Gaussian noise denoiser, even if the observation noise is Poisson.
-prior = RED(denoiser = dinv.models.DnCNN(pretrained="ckpts/dncnn_sigma2_color.pth", device=device))
+    def __init__(self, **kwargs):
+        super(gStepGD, self).__init__(**kwargs)
 
-# Set up the optimization parameters
-max_iter = 200  # number of iterations
-stepsize = 1.0  # stepsize of the algorithm
-sigma_denoiser = 0.05  # noise level parameter of the Gaussian denoiser
-params_algo = {  # wrap all the restoration parameters in a 'params_algo' dictionary. In particular, this is here that we define the bregman potential used in the mirror descent algorithm.
-    "stepsize": stepsize,
-    "g_param": sigma_denoiser,
-}
+    def forward(self, x, cur_prior, cur_params):
+        r"""
+        Single iteration step on the prior term :math:`\lambda g`.
 
-# Logging parameters
-verbose = True
-
-# Define the unfolded trainable model.
-model = optim_builder(
-    iteration="MD",
-    prior=prior,
-    data_fidelity=data_fidelity,
-    early_stop=True,
-    max_iter=max_iter,
-    verbose=verbose,
-    params_algo=params_algo,
-    bregman_potential=BurgEntropy(),
-)
+        :param torch.Tensor x: Current iterate :math:`x_k`.
+        :param deepinv.optim.prior cur_prior: Instance of the Prior class defining the current prior.
+        :param dict cur_params: Dictionary containing the current parameters of the algorithm.
+        """
+        return cur_params["lambda"] * cur_prior.grad(x, cur_params["g_param"])
 
 
-# %%
-# Evaluate the model on the problem and plot the results.
-# --------------------------------------------------------------------
-#
-# The model returns the output and the metrics computed along the iterations.
-# For computing PSNR, the ground truth image ``x_gt`` must be provided.
+class DualMDIteration(MDIteration):
 
-y = physics(x)
-x_lin = physics.A_adjoint(y)
+    def __init__(self, bregman_potential=dinv.optim.bregman.BregmanL2(), **kwargs):
+        super(MDIteration, self).__init__(**kwargs)
+        self.g_step = gStepGD(**kwargs)
+        self.f_step = fStepGD(**kwargs)
+        self.requires_grad_g = True
+        self.bregman_potential = bregman_potential
 
-# run the model on the problem.
-with torch.no_grad():
-    x_model, metrics = model(
-        y, physics, x_gt=x, compute_metrics=True
-    )  # reconstruction with PnP algorithm
 
-# compute PSNR
-print(f"Linear reconstruction PSNR: {dinv.metric.PSNR()(x, x_lin).item():.2f} dB")
-print(f"PnP reconstruction PSNR: {dinv.metric.PSNR()(x, x_model).item():.2f} dB")
+    def forward(
+        self, X, cur_data_fidelity, cur_prior, cur_params, y, physics, *args, **kwargs
+    ):  
+        y_prev = X["est"][0]
+        x_prev = self.bregman_potential.grad_conj(y_prev)
+        grad = cur_params["stepsize"] * (
+            self.g_step(x_prev, cur_prior, cur_params)
+            + self.f_step(x_prev, cur_data_fidelity, cur_params, y, physics)
+        )
+        y = y_prev - grad
+        return {"est": (y,)}
 
-# plot images. Images are saved in RESULTS_DIR.
-imgs = [y, x, x_lin, x_model]
-plot(
-    imgs,
-    titles=["Input", "GT", "Linear", "Recons."],
-    save_dir=RESULTS_DIR / "images",
-    show=True,
-)
 
-# plot convergence curves. Metrics are saved in RESULTS_DIR.
-plot_curves(metrics, save_dir=RESULTS_DIR / "curves", show=True)
+
+class DeepBregman(Bregman):
+    r"""
+    Module for the using a deep NN as Bregman potential.
+    """
+
+    def __init__(self, forw_model = None, conj_model = None):
+        super().__init__()
+        self.forw_model = forw_model
+        self.conj_model = conj_model
+
+    def fn(self, x, *args, init = None, **kwargs):
+        r"""
+        Computes the Bregman potential.
+
+        :param torch.Tensor x: Variable :math:`x` at which the potential is computed.
+        :return: (torch.tensor) potential :math:`\phi(x)`.
+        """
+        if self.forw_model is not None:
+            return self.forw_model(x, *args, **kwargs)
+        else:
+            return self.conjugate_conjugate(x, *args, init = init, **kwargs)
+
+    def grad(self, x, *args, init = None, **kwargs):
+        if self.forw_model is not None:
+            return super().grad(x, *args, **kwargs)
+        else:
+            return self.grad_conj_conj(x, *args, init = init, **kwargs)
+
+    def conjugate(self, x, *args, **kwargs):
+        r"""
+        Computes the convex conjugate potential.
+
+        :param torch.Tensor x: Variable :math:`x` at which the conjugate is computed.
+        :return: (torch.tensor) conjugate potential :math:`\phi^*(y)`.
+        """
+        if self.conj_model is not None:
+            return self.conj_model(x, *args, **kwargs)
+        else:
+            return super().conjugate(x, *args, **kwargs)
+
+    def grad_conj(self, x, *args, **kwargs):
+        with torch.enable_grad():
+            x = x.requires_grad_()
+            h = self.conjugate(x, *args, **kwargs)
+            grad = torch.autograd.grad(
+                h,
+                x,
+                torch.ones_like(h),
+                create_graph=True,
+                only_inputs=True,
+            )[0]
+        return grad
+        
+    def conjugate_conjugate(self, x, *args, init = None, **kwargs):
+        grad = lambda z: self.grad_conj(z, *args, **kwargs) - x
+        init = x if init is None else init
+        z = gradient_descent(-grad, init)
+        return self.conjugate(z, *args, **kwargs) - torch.sum(
+            x.reshape(x.shape[0], -1) * z.reshape(z.shape[0], -1), dim=-1
+        ).view(x.shape[0], 1)
+
+    def grad_conj_conj(self, x, *args, method = 'fixed-point', init = None, **kwargs):
+        if method == 'backprop':
+            with torch.enable_grad():
+                x = x.requires_grad_()
+                h = self.conjugate_conjugate(x, *args, init = init, **kwargs)
+                grad = torch.autograd.grad(
+                    h,
+                    x,
+                    torch.ones_like(h),
+                    create_graph=True,
+                    only_inputs=True,
+                )[0]
+            return grad
+        else: 
+            init = x if init is None else init
+            grad = lambda z: self.grad_conj(z, *args, **kwargs) - x
+            return gradient_descent(grad, init)
+            
+
+class MirrorLoss(Loss):
+    def __init__(self, metric=torch.nn.MSELoss()):
+        super(MirrorLoss, self).__init__()
+        self.name = "mirror"
+        self.metric = metric
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        bregman_potential = model.fixed_point.iterator.bregman_potential
+        return self.metric(bregman_potential.grad_conj(bregman_potential.grad(x_net)), x_net)
+
+
+class FunctionalMetric(Metric):
+    def __init__(self):
+        super(FunctionalMetric, self).__init__()
+        self.name = "F_value"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        it = 0
+        params = model.params_algo
+        data_fidelity = model.data_fidelity[it] if isinstance(model.data_fidelity, Iterable) else model.data_fidelity
+        prior = model.prior[it] if isinstance(model.prior, Iterable) else model.prior
+        if prior.explicit_prior :
+            return data_fidelity.fn(x_net, y, physics) + params["lambda"][it] * prior(x_net, params["g_param"][it])
+        else :
+            return data_fidelity.fn(x_net, y, physics)
+
+
+class LambdaMetric(Metric):
+    def __init__(self):
+        super(LambdaMetric, self).__init__()
+        self.name = "lambda"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['lambda'][0])
+
+class StepsizeMetric(Metric):
+    def __init__(self):
+        super(StepsizeMetric, self).__init__()
+        self.name = "stepsize"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['stepsize'][0])
+
+class SigmaMetric(Metric):
+    def __init__(self):
+        super(SigmaMetric, self).__init__()
+        self.name = "sigma"
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+        return torch.tensor(model.params_algo['g_param'][0])
+
+class NoLipLoss(Loss):
+    def __init__(self, L = 1., eps_jacobian_loss = 0.05, jacobian_loss_weight = 1e-2, max_iter_power_it=10, tol_power_it=1e-3, verbose=False, eval_mode=False, use_interpolation=False):
+        super(NoLipLoss, self).__init__()
+        self.name = "NoLip"
+        self.spectral_norm_module = dinv.loss.JacobianSpectralNorm(
+            max_iter=max_iter_power_it, tol=tol_power_it, verbose=verbose, eval_mode=eval_mode
+        )
+        self.L = L
+        self.use_interpolation = use_interpolation
+        self.eps_jacobian_loss = eps_jacobian_loss
+        self.jacobian_loss_weight = jacobian_loss_weight
+
+    def forward(self, x, x_net, y, physics, model, *args, **kwargs):
+
+        if self.use_interpolation:
+            eta = torch.rand(x.size(0), 1, 1, 1, requires_grad=True).to(x.device)
+            x = eta * x.detach() + (1 - eta) * x_net.detach()
+        else:
+            x = x
+        
+        bregman_potential = model.fixed_point.iterator.bregman_potential
+    
+        x.requires_grad_()
+        x = bregman_potential.grad_conj(x)
+        # We need to apply to the loss at each iteration.For now we assume the model is fixed along iterations
+        it = 0
+        params = model.params_algo
+        data_fidelity = model.data_fidelity[it] if isinstance(model.data_fidelity, Iterable) else model.data_fidelity
+        prior = model.prior[it] if isinstance(model.prior, Iterable) else model.prior
+        nabla_F = data_fidelity.grad(x, y, physics) + params["lambda"][it] * prior.grad(x, params["g_param"][it])
+        jacobian_norm = (1 / self.L) * self.spectral_norm_module(nabla_F, x)
+        jacobian_loss = self.jacobian_loss_weight * torch.maximum(jacobian_norm, torch.ones_like(jacobian_norm)-self.eps_jacobian_loss)
+        return jacobian_loss
+
+
+
+
+def get_unrolled_architecture(max_iter = 10, data_fidelity="L2", prior_name="wavelet", denoiser_name="DRUNET", stepsize_init=1.0, lamb_init=1.0, sigma_denoiser_init = 0.03, device = "cpu", 
+                                use_mirror_loss=False, use_dual_iterations = False, strong_convexity_backward=0.5, strong_convexity_forward=0.1, strong_convexity_potential='L2'):
+
+    # Select the data fidelity term
+    if data_fidelity.lower() == 'l2':
+        data_fidelity = dinv.optim.data_fidelity.L2()
+    elif data_fidelity.lower() == 'kl':
+        data_fidelity = dinv.optim.data_fidelity.PoissonLikelihood(denormalize=False, bkg=1e-15)
+        
+    # Set up the prior
+    if prior_name.lower() == 'wavelet':
+        prior = dinv.optim.WaveletPrior(wv="db8", level=3, device=device)
+    elif prior_name.lower() == 'red':
+        if denoiser_name.lower() == 'drunet':
+            denoiser = dinv.models.DRUNet(pretrained="ckpts/drunet_deepinv_color.pth", device=device)
+        if denoiser_name.lower() == 'dncnn':
+            denoiser = dinv.models.DnCNN(pretrained="ckpts/dncnn_sigma2_color.pth", device=device)
+            sigma_denoiser_init = 2/255.
+        prior = dinv.optim.prior.RED(denoiser = denoiser)
+        sigma_denoiser = [sigma_denoiser_init] # only one sigma
+
+    # Freeze prior for now
+    for param in prior.parameters():
+        param.requires_grad = False
+
+    # Unrolled optimization algorithm parameters
+    stepsize = [stepsize_init]  # stepsize of the algorithm, only one stepsize.
+    lamb = [lamb_init] # only one lambda.
+    
+    if use_mirror_loss: 
+        forw_bregman = ICNN(in_channels=3,
+                            num_filters=32,
+                            kernel_dim=3,
+                            num_layers=5,
+                            strong_convexity=strong_convexity_forward,
+                            pos_weights=False,
+                            device="cpu").to(device)
+    else:
+        forw_bregman = None
+    back_bregman = ICNN(in_channels=3,
+                            num_filters=32,
+                            kernel_dim=3,
+                            num_layers=5,
+                            strong_convexity=strong_convexity_backward,
+                            pos_weights=True,
+                            device="cpu").to(device)
+
+    params_algo = {  # wrap all the restoration parameters in a 'params_algo' dictionary
+        "stepsize": stepsize,
+        "lambda": lamb,
+        "g_param": sigma_denoiser if prior_name == 'RED' else None
+    }
+    trainable_params = [
+        "lambda",
+        "stepsize",
+    ]  # define which parameters from 'params_algo' are trainable
+
+    bregman_potential = DeepBregman(forw_model = forw_bregman, conj_model = back_bregman)
+
+    if use_dual_iterations:
+        iteration = DualMDIteration(bregman_potential = bregman_potential)
+        def custom_init(y, physics, stop_grad = True):
+            if stop_grad:
+                with torch.no_grad():
+                    return {'est' : [bregman_potential.grad(physics.A_adjoint(y))]}
+            else:
+                return {'est' : [bregman_potential.grad(physics.A_adjoint(y))]}
+        custom_output = lambda X : bregman_potential.grad_conj(X["est"][0])
+    else:
+        iteration = MDIteration(bregman_potential = bregman_potential)
+        custom_init = lambda y, physics : {'est' : [physics.A_adjoint(y)]}
+        custom_output = lambda X: X["est"][0]
+
+    # Define the unfolded trainable model.
+    model = unfolded_builder(
+        iteration=iteration,
+        params_algo=params_algo.copy(),
+        trainable_params=trainable_params,
+        data_fidelity=data_fidelity,
+        max_iter=max_iter,
+        prior=prior,
+        custom_init=custom_init,
+        get_output = custom_output
+    )
+
+    return model.to(device)
+
+
+if __name__ == '__main__':
+    from deepinv.utils.demo import load_url_image, get_image_url
+    from deepinv.utils.plotting import plot, plot_curves
+
+
+    device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else "cpu"
+
+    img_size = 64
+    device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else "cpu"
+    url = get_image_url("butterfly.png")
+    x_true = load_url_image(url=url, img_size=img_size).to(device)
+    x = x_true.clone()
+
+
+    gain = 1 / 40
+    noise = dinv.physics.PoissonNoise(gain = gain, clip_positive = True, normalize=True)
+    physics = dinv.physics.BlurFFT(
+            img_size=(3, img_size, img_size),
+            filter=dinv.physics.blur.gaussian_blur(),
+            device=device,
+            noise_model=noise,
+        )
+    
+    stepsize = 0.01
+    sigma_denoiser_init = 2 / 255.
+    lamb_init = 1
+    use_dual_iterations = True
+    
+    model = get_unrolled_architecture(
+        max_iter=10,
+        data_fidelity="KL",
+        prior_name="RED",
+        denoiser_name="dncnn",
+        stepsize_init=stepsize,
+        sigma_denoiser_init=sigma_denoiser_init,
+        lamb_init=lamb_init,
+        device=device,
+        use_dual_iterations = use_dual_iterations,
+        strong_convexity_forward = 1.,
+        strong_convexity_backward = 1.,
+        use_mirror_loss = True
+    ) 
+
+    y = physics(x)
+    x_lin = physics.A_adjoint(y)
+    with torch.no_grad():
+        x_model, metrics = model(
+            y, physics, x_gt=x, compute_metrics=True
+        )  # reconstruction with PnP algorithm
+
+    # compute PSNR
+    print(f"Linear reconstruction PSNR: {dinv.metric.PSNR()(x, x_lin).item():.2f} dB")
+    print(f"PnP reconstruction PSNR: {dinv.metric.PSNR()(x, x_model).item():.2f} dB")
+
+    # plot images. Images are saved in RESULTS_DIR.
+    imgs = [y, x, x_lin, x_model]
+    plot(
+        imgs,
+        titles=["Input", "GT", "Linear", "Recons."],
+        show=True,
+    )
+    plot_curves(metrics, show=True)
